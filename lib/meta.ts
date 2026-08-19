@@ -10,6 +10,7 @@ import type { DayPoint } from "./datasource";
 import { resultLadder } from "./meta-labels";
 import { computePacing, daysBetween, daysElapsedSince, type Pacing } from "./pacing";
 import { mapMetaStatus } from "./status";
+import { UPLOAD_NOTE } from "./uploads";
 export { resultLadder }; // type-only import — no runtime cycle
 
 const graphBase = () => `https://graph.facebook.com/${process.env.META_API_VERSION || "v23.0"}`;
@@ -66,6 +67,23 @@ export const LIVE_PREFIX = "meta_"; // live ids can never collide with seeded id
    UNSCOPED read that mixes two ad accounts' campaigns together.
    Adding the columns on first use closes both holes. All statements are
    idempotent, so this is safe to run on every cold start. */
+/**
+ * Make sure the meta_* tables exist at all.
+ *
+ * ensureMetaSchema below only ALTERs — it assumes db/meta-sync.sql was run.
+ * A deployment that only ever uploads reports has never run it, so the tables
+ * are created on first read instead. Failures are swallowed: a Graph-synced
+ * install already has its tables and must not be blocked by this.
+ */
+export async function ensureUploadTables(): Promise<void> {
+  try {
+    const { ensureUploadSchema } = await import("./uploads");
+    await ensureUploadSchema();
+  } catch {
+    /* no database, or no permission to create — the reads report their own errors */
+  }
+}
+
 let metaSchemaReady: Promise<void> | null = null;
 
 export function ensureMetaSchema(): Promise<void> {
@@ -119,6 +137,30 @@ export function setActiveAccount(id: string | null | undefined) {
 
 export function currentAccountId(): string {
   return String(activeAccountOverride ?? process.env.META_AD_ACCOUNT_ID ?? "");
+}
+
+/**
+ * Point the active account at whichever account owns this campaign.
+ *
+ * Every read below is scoped by ad account, but the per-campaign routes
+ * (/api/db/campaign-detail, /api/db/periods) are called with only a campaign
+ * id. Without this they fall back to META_AD_ACCOUNT_ID and return nothing for
+ * any campaign that account does not own — which is every campaign on a
+ * deployment that has no env credential at all, uploads included.
+ *
+ * A campaign id determines its account uniquely, so resolving from the row can
+ * only correct the scope, never widen it.
+ */
+export async function ensureAccountForCampaign(metaId: string): Promise<void> {
+  if (!metaId) return;
+  try {
+    const rows = (await getSql()`
+      SELECT ad_account_id FROM meta_campaigns WHERE id = ${metaId} LIMIT 1`) as unknown as Record<string, unknown>[];
+    const owner = rows.length ? String(rows[0].ad_account_id ?? "") : "";
+    if (owner && owner !== currentAccountId()) setActiveAccount(owner);
+  } catch {
+    // Column not migrated yet, or no database — leave the scope as it was.
+  }
 }
 
 /* ---------------- small helpers ---------------- */
@@ -436,6 +478,9 @@ type LiveRow = {
   start_time?: string | null;
   stop_time?: string | null;
   account_currency?: string;
+  /** 'graph' for a synced campaign, 'upload' for one read from a file. Drives
+   *  the provenance label — uploaded numbers must never read as live ones. */
+  data_source?: string | null;
   metrics: (MetaInsightRow & { conv_value?: number })[]; // per-day, oldest → newest
 };
 
@@ -564,7 +609,7 @@ function toCampaign(row: LiveRow): Campaign {
       ctrTrend: days.map((d) => num(d.ctr)),
       impressions,
     }),
-    note: "Live · Meta Graph API",
+    note: row.data_source === "upload" ? UPLOAD_NOTE : "Live · Meta Graph API",
     spark,
     impressions,
     reach: reach > 0 ? reach : undefined,
@@ -582,6 +627,7 @@ function toCampaign(row: LiveRow): Campaign {
 
 const LIVE_SELECT_ONE = (metaId: string) => getSql()`
   SELECT c.id, c.name, c.status, c.objective, c.daily_budget,
+         c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source,
          COALESCE(json_agg(json_build_object(
            'date', to_char(m.date, 'YYYY-MM-DD'),
            'spend', m.spend, 'impressions', m.impressions, 'clicks', m.clicks,
@@ -591,7 +637,8 @@ const LIVE_SELECT_ONE = (metaId: string) => getSql()`
   FROM meta_campaigns c
   LEFT JOIN meta_daily_metrics m ON m.campaign_id = c.id
   WHERE c.id = ${metaId} AND c.ad_account_id = ${currentAccountId()}
-  GROUP BY c.id, c.name, c.status, c.objective, c.daily_budget`;
+  GROUP BY c.id, c.name, c.status, c.objective, c.daily_budget,
+           c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source`;
 
 /**
  * Every ad account this token can actually read — discovered from the
@@ -648,6 +695,7 @@ export async function accountCurrency(): Promise<string> {
 export async function loadLiveCampaigns(): Promise<Campaign[]> {
   // Bring the schema up to date FIRST: without ad_account_id the scoped query
   // below throws and the unscoped fallback would mix accounts together.
+  await ensureUploadTables();
   await ensureMetaSchema().catch(() => {});
   let rows: Record<string, any>[];
   try {
@@ -669,8 +717,13 @@ export async function loadLiveCampaigns(): Promise<Campaign[]> {
       id: String(r.id),
       name: String(r.name),
       status: String(r.status ?? "ACTIVE"),
+      effective_status: r.effective_status ? String(r.effective_status) : null,
       objective: String(r.objective ?? "—"),
       daily_budget: num(r.daily_budget) || budgetCache[String(r.id)] || 0,
+      lifetime_budget: num(r.lifetime_budget),
+      start_time: r.start_time ? String(r.start_time) : null,
+      stop_time: r.stop_time ? String(r.stop_time) : null,
+      data_source: r.data_source ? String(r.data_source) : null,
       metrics: normalizeMetrics(r.metrics),
       account_currency: cur,
     })
@@ -680,8 +733,13 @@ export async function loadLiveCampaigns(): Promise<Campaign[]> {
 let budgetCache: Record<string, number> = {};
 
 async function loadLiveCampaignRowsFull() {
+  // effective_status, the lifetime budget and the flight window are selected
+  // here (not just declared on LiveRow) so campaign pacing has a denominator
+  // for accounts whose budgets are lifetime rather than daily. A database
+  // predating those columns throws and falls back to the legacy query.
   const rows = (await getSql()`
     SELECT c.id, c.name, c.status, c.objective, c.daily_budget,
+           c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source,
            COALESCE(json_agg(json_build_object(
              'date', to_char(m.date, 'YYYY-MM-DD'),
              'spend', m.spend, 'impressions', m.impressions, 'clicks', m.clicks,
@@ -691,7 +749,8 @@ async function loadLiveCampaignRowsFull() {
     FROM meta_campaigns c
     LEFT JOIN meta_daily_metrics m ON m.campaign_id = c.id
     WHERE c.ad_account_id = ${currentAccountId()}
-    GROUP BY c.id, c.name, c.status, c.objective, c.daily_budget
+    GROUP BY c.id, c.name, c.status, c.objective, c.daily_budget,
+             c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source
     ORDER BY c.name`) as unknown as Record<string, any>[];
   await loadBudgetCache();
   return rows;
@@ -746,6 +805,8 @@ async function loadBudgetCache() {
 export async function loadLiveCampaign(liveId: string): Promise<Campaign | null> {
   if (!liveId.startsWith(LIVE_PREFIX)) return null;
   const metaId = liveId.slice(LIVE_PREFIX.length);
+  await ensureUploadTables();
+  await ensureAccountForCampaign(metaId);
   let rows: Record<string, any>[];
   try {
     rows = (await LIVE_SELECT_ONE(metaId)) as unknown as Record<string, any>[];
@@ -768,8 +829,13 @@ export async function loadLiveCampaign(liveId: string): Promise<Campaign | null>
     id: String(r.id),
     name: String(r.name),
     status: String(r.status ?? "ACTIVE"),
+    effective_status: r.effective_status ? String(r.effective_status) : null,
     objective: String(r.objective ?? "—"),
     daily_budget: num(r.daily_budget),
+    lifetime_budget: num(r.lifetime_budget),
+    start_time: r.start_time ? String(r.start_time) : null,
+    stop_time: r.stop_time ? String(r.stop_time) : null,
+    data_source: r.data_source ? String(r.data_source) : null,
     metrics: normalizeMetrics(r.metrics),
     account_currency: await accountCurrency(),
   });
@@ -782,7 +848,7 @@ export async function loadLiveSeries(
 ): Promise<DayPoint[]> {
   if (!liveId.startsWith(LIVE_PREFIX)) return [];
   const metaId = liveId.slice(LIVE_PREFIX.length);
-  const sql = getSql();
+  await ensureAccountForCampaign(metaId);
   const rows = (await (async () => {
     try {
       return await selectSeriesFull(metaId, from, to);
@@ -1088,6 +1154,7 @@ export async function loadLiveAdsets(
 ): Promise<AdSet[]> {
   if (!liveCampaignId.startsWith(LIVE_PREFIX)) return [];
   const campaignId = liveCampaignId.slice(LIVE_PREFIX.length);
+  await ensureAccountForCampaign(campaignId);
   const sql = getSql();
   // Open-ended defaults keep the "whole history" behaviour for callers that
   // don't specify a window.
@@ -1287,7 +1354,7 @@ export async function loadLiveAdsets(
       reachPct: 0, // share-of-audience needs a denominator the API doesn't give
       // Absolute unique people reached — peak daily reach across the window.
       reachAbs: Math.max(0, ...daily.map((d) => d.reach || 0)),
-      note: roas === 0 ? "Live · revenue not reported by this account" : "Live · Meta Graph API",
+      note: roas === 0 ? "Revenue not reported for this ad set" : "Reported metrics",
       optimizationGoal: String(r.optimization_goal ?? ""),
       destinationType: String(r.destination_type ?? ""),
       ctrTrend,
@@ -1344,8 +1411,20 @@ async function writeAccountCache(v: AccountInfo): Promise<void> {
  *  per 6 hours, not one per page load. Pass force=true to refresh (the sync
  *  route does this so a currency or name change is picked up immediately). */
 export async function fetchAccountInfo(force = false): Promise<AccountInfo | null> {
-  if (!metaConfigured()) return null;
   const acct = currentAccountId();
+
+  // An uploaded batch is an ad account with no token behind it. Its identity
+  // lives in upload_batches, so resolve it here — before the credential check
+  // — or every uploaded account would fall back to USD/UTC and the wrong name.
+  const { isUploadAccount, getBatch } = await import("./uploads");
+  if (isUploadAccount(acct)) {
+    const batch = await getBatch(acct);
+    return batch
+      ? { id: acct, name: batch.label, currency: batch.currency, timezone: batch.timezone }
+      : null;
+  }
+
+  if (!metaConfigured()) return null;
 
   if (!force) {
     const memo = accountMemo.get(acct);
@@ -1380,6 +1459,13 @@ export async function fetchAccountInfo(force = false): Promise<AccountInfo | nul
 
 /** Real last-sync timestamp from sync_log — replaces the seeded "Today 02:00". */
 export async function getLastSynced(): Promise<string | null> {
+  // An uploaded batch was never "synced" — the honest timestamp is when the
+  // file was uploaded, which is also what the staleness warning should use.
+  const { isUploadAccount, getBatch } = await import("./uploads");
+  if (isUploadAccount(currentAccountId())) {
+    const batch = await getBatch(currentAccountId());
+    return batch?.uploadedAt ?? null;
+  }
   try {
     // Prefer this account's own row; fall back to the global marker for
     // databases synced before per-account tracking existed.

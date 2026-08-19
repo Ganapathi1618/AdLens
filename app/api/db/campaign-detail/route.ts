@@ -22,9 +22,15 @@ export async function GET(req: Request) {
   // Explicit account selection — the platform is not tied to one configured
   // account, so any account the credential can reach may be requested.
   const accountParam = url.searchParams.get("account");
-  if (accountParam) (await import("@/lib/meta")).setActiveAccount(accountParam);
+  const meta = await import("@/lib/meta");
   const isLive = id.startsWith("meta_");
-  const tz = isLive ? (await (await import("@/lib/meta")).fetchAccountInfo())?.timezone ?? "UTC" : "UTC";
+  if (accountParam) meta.setActiveAccount(accountParam);
+  // The analysis page links here with a campaign id alone. Resolving the
+  // owning account from the row is what makes that work for an OAuth account
+  // or an uploaded report — without it the scope falls back to the env
+  // account, which an upload-only deployment does not have.
+  else if (isLive) await meta.ensureAccountForCampaign(id.slice("meta_".length));
+  const tz = isLive ? (await meta.fetchAccountInfo())?.timezone ?? "UTC" : "UTC";
   const presetKey = (url.searchParams.get("preset") || "last_30") as PresetKey;
   const resolved = resolveRange(presetKey, tz, {
     since: url.searchParams.get("since"),
@@ -81,6 +87,25 @@ export async function GET(req: Request) {
       empty: dates.length === 0,
     };
 
+    // Where these numbers came from, carried to the UI so an uploaded report
+    // can never be presented with a "Live · Meta Graph API" label, and so the
+    // metrics its file does not contain render as "not reported" rather than 0.
+    const { getBatch, isUploadAccount } = await import("@/lib/uploads");
+    const activeAccount = meta.currentAccountId();
+    const batch = isLive && isUploadAccount(activeAccount) ? await getBatch(activeAccount) : null;
+    const provenance = batch
+      ? {
+          kind: "upload" as const,
+          label: `Uploaded · ${batch.filename}`,
+          detail: `${batch.rowsParsed.toLocaleString()} rows · ${batch.dateStart ?? "?"} to ${batch.dateEnd ?? "?"} · uploaded ${new Date(batch.uploadedAt).toLocaleDateString()}`,
+          tier: batch.tier,
+          capabilities: batch.capabilities,
+          warnings: batch.warnings,
+          uploadedAt: batch.uploadedAt,
+          accountId: batch.id,
+        }
+      : { kind: (isLive ? "graph" : "seeded") as "graph" | "seeded", label: isLive ? "Live · Meta Graph API" : "Snapshot", detail: null, tier: null, capabilities: [], warnings: [], uploadedAt: null, accountId: activeAccount };
+
     return NextResponse.json({
       campaign,
       adsets,
@@ -90,8 +115,9 @@ export async function GET(req: Request) {
       adsetsInAccount,
       range,
       coverage,
+      provenance,
       timezone: tz,
-      currency: process.env.META_CURRENCY ?? "USD",
+      currency: (batch?.currency ?? campaign.currency) || process.env.META_CURRENCY || "USD",
     }, NO_STORE);
   } catch {
     return NextResponse.json({ error: "unavailable" }, { status: 500, ...NO_STORE });

@@ -1,7 +1,7 @@
 import { NextRequest, NextResponse } from "next/server";
 import { buildEvidence, verifyCitations } from "@/lib/reasoning";
 import { generateNarrative } from "@/lib/llm";
-import { parseQuery, retrieveData } from "@/lib/aiPipeline";
+import { parseQuery, retrieveData, sourceLabel } from "@/lib/aiPipeline";
 import { weekOverWeek, monthOverMonth } from "@/lib/periods";
 import { money } from "@/lib/currency";
 
@@ -70,7 +70,7 @@ export async function POST(req: NextRequest) {
       name: a.name, status: a.status ?? null, pacing: a.pacingDetail ?? null,
     })),
     dataFreshness: {
-      source: retrieval.isLive ? "Meta Ads API (live)" : "seeded dataset",
+      source: sourceLabel(retrieval),
       syncedAt: retrieval.syncedAt,
       refreshedForThisReport: retrieval.refreshed,
     },

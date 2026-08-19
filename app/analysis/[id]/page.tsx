@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, AreaChart, Area } from "recharts";
 import { FileText, Wallet, DollarSign, Target, MousePointerClick, Coins, Repeat, TrendingUp, Activity, Users, RefreshCw } from "lucide-react";
@@ -56,7 +57,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [loadingRange, setLoadingRange] = useState(false);
 
-  const [liveData, setLiveData] = useState<{ campaign: Campaign; adsets: AdSet[]; series: { day: string; ctr: number; cpa: number; spend: number; revenue: number }[]; currency: string; adsetError?: string | null; seriesError?: string | null; adsetsInAccount?: { id: string; name: string; campaignId: string; campaignName: string | null; days: number }[]; range?: { since: string; until: string; days: number; label: string; metaPreset: string | null }; coverage?: { requested: { since: string; until: string; days: number }; returned: { since: string | null; until: string | null; days: number }; complete: boolean; empty: boolean }; timezone?: string } | null>(null);
+  const [liveData, setLiveData] = useState<{ campaign: Campaign; adsets: AdSet[]; series: { day: string; ctr: number; cpa: number; spend: number; revenue: number }[]; currency: string; adsetError?: string | null; seriesError?: string | null; adsetsInAccount?: { id: string; name: string; campaignId: string; campaignName: string | null; days: number }[]; range?: { since: string; until: string; days: number; label: string; metaPreset: string | null }; coverage?: { requested: { since: string; until: string; days: number }; returned: { since: string | null; until: string | null; days: number }; complete: boolean; empty: boolean }; provenance?: { kind: "upload" | "graph" | "seeded"; label: string; detail: string | null; tier: string | null; capabilities: { key: string; label: string; available: boolean; reason: string }[]; warnings: string[]; uploadedAt: string | null; accountId: string }; timezone?: string } | null>(null);
   const [liveErr, setLiveErr] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
@@ -95,6 +96,11 @@ export default function Analysis({ params }: { params: { id: string } }) {
       .catch((e) => { setRangeError(e?.message ?? "failed to load range"); setLiveErr(true); })
       .finally(() => setLoadingRange(false));
   }, [id, isLive, rangeKey, customSince, customUntil]);
+
+  // Provenance drives more than a label: metrics absent from an uploaded file
+  // must read as "not reported", never as a measured 0.
+  const isUpload = liveData?.provenance?.kind === "upload";
+  const unavailable = (liveData?.provenance?.capabilities ?? []).filter((cap) => !cap.available);
 
   const c = isLive ? liveData?.campaign ?? null : getCampaign(id) ?? null;
   const cur = sym(isLive ? liveData?.currency ?? c?.currency : "USD");
@@ -327,12 +333,16 @@ export default function Analysis({ params }: { params: { id: string } }) {
             detail={anomalies.length ? `${anomalies.length} ${anomalies.length === 1 ? "anomaly" : "anomalies"} detected` : "no anomalies in window"} />
           <div className="flex flex-col gap-2 items-end">
             <div className="flex items-center gap-2">
-              {isLive && (
+              {isLive && (isUpload ? (
+                <Link href="/upload" className="btn-ghost" title="Replace this report with a newer export">
+                  <RefreshCw size={13} /> Re-upload report
+                </Link>
+              ) : (
                 <button onClick={resync} disabled={syncing} className="btn-ghost" title="Refresh only this campaign from the Meta Ads API">
                   <RefreshCw size={13} className={syncing ? "animate-spin" : undefined} />
                   {syncing ? "Syncing…" : "Sync campaign"}
                 </button>
-              )}
+              ))}
               <button onClick={() => router.push("/reporting")} className="btn-primary"><FileText size={14} /> Generate report</button>
             </div>
             {syncMsg && <div className="text-[11px] font-semibold text-accent">{syncMsg}</div>}
@@ -409,7 +419,11 @@ export default function Analysis({ params }: { params: { id: string } }) {
                     : `${liveData?.range?.since} → ${liveData?.range?.until} · ${liveData?.coverage?.returned.days ?? 0} of ${liveData?.range?.days ?? 0} days with data${liveData?.timezone ? ` · ${liveData.timezone}` : ""}`)
                 : preset === "Daily" ? "Today · hourly" : preset === "Weekly" ? "Last 7 days" : preset === "Monthly" ? "Jun 1 – Jun 30, 2025" : "All time"}</span>
             )}
-            <span className="pill-mut">{isLive ? `Live · Meta Graph API · ${full.length}d synced` : "Snapshot · Today 02:00"}</span>
+            <span className="pill-mut" title={liveData?.provenance?.detail ?? undefined}>
+              {isUpload
+                ? `${liveData?.provenance?.label ?? "Uploaded report"} · ${full.length}d`
+                : isLive ? `Live · Meta Graph API · ${full.length}d synced` : "Snapshot · Today 02:00"}
+            </span>
             {fetchNote && <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={clsx("text-[11px] font-bold", fetchNote.includes("✓") ? "text-good" : "text-accent")}>{fetchNote}</motion.span>}
           </>
         ) : (
@@ -452,6 +466,25 @@ export default function Analysis({ params }: { params: { id: string } }) {
           )
         )}
       </div>
+
+      {/* Uploaded data: say plainly which metrics the file did not contain, so a
+          0 on the cards below is never mistaken for a measurement. */}
+      {isUpload && (
+        <div className="card p-4 mb-4 border-accent/30" style={{ background: "var(--accent-soft)" }}>
+          <div className="text-[13px] font-bold mb-1">
+            These figures come from an uploaded report{liveData?.provenance?.detail ? ` — ${liveData.provenance.detail}` : ""}.
+          </div>
+          <div className="text-[12.5px] text-mut font-medium leading-relaxed">
+            They are a frozen extract for the dates above, not a live read.
+            {unavailable.length > 0 && (
+              <> Not in this file, so shown as not reported rather than zero:{" "}
+                <strong className="text-ink">{unavailable.map((cap) => cap.label).join(", ")}</strong>.
+              </>
+            )}{" "}
+            <Link href="/upload" className="text-accent font-bold">Upload a richer export</Link> to unlock the rest.
+          </div>
+        </div>
+      )}
 
       {isLive && liveData?.coverage?.empty && (
         <div className="card p-4 mb-4 text-[13px]">

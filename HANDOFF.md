@@ -27,6 +27,60 @@ Routing is by ID prefix, in `MergedDataSource` (`lib/datasource.ts`). There is n
 global mode flag — the prefix *is* the mode. Demo Mode must keep working
 untouched; it is the graded CP1 deliverable.
 
+## 2b. Uploaded reports (third mode)
+
+A deployment with **no Meta credentials at all** is a supported way to run
+AdLens. `/upload` takes an Ads Manager export and stores it as a **synthetic ad
+account** in the same `meta_*` tables the sync writes to.
+
+```
+.csv / .xlsx
+  → lib/xlsx.ts | lib/csv.ts        bytes → rows of strings, then coercion
+  → lib/adsReport.ts                column mapping, capability tiering, normalisation
+  → lib/uploads.ts                  UNNEST bulk insert into meta_* under ad_account_id
+  → the SAME readers as live data   loadLiveCampaigns / loadLiveSeries / loadLiveAdsets
+```
+
+**Why the same tables, not new ones.** Every live read in `lib/meta.ts` is
+already scoped by `ad_account_id`. Reusing them means the reasoning engine,
+pacing, period comparison, the AI pipeline and every page work on uploads with
+no second implementation to keep in step. Two properties make it safe:
+
+- Upload account ids are `up` + 12 hex. Real Meta ad account ids are **digits
+  only**, so they cannot collide, and `/api/sync/meta` refuses an upload id
+  outright.
+- `meta_campaigns.data_source` is `'upload'` vs `'graph'`, which is what makes
+  provenance survive into the UI (`Campaign.note`) and into the AI's context.
+
+**Invariants — do not break these:**
+
+1. **A missing column is never a zero.** No impressions column means no CTR, not
+   a CTR of 0%. The batch's `capabilities` list carries what is unavailable and
+   why, and it is rendered on the analysis page and fed to the model.
+2. **Uploaded data is never labelled live.** `snapshot.mode` is
+   `uploaded-report`, and `lib/aiPipeline.ts:sourceLabel()` tells the model it is
+   a frozen extract.
+3. **Ratios are recomputed from totals**, never averaged across rows. Per-day
+   `roas` is stored as value ÷ spend because `loadLiveAdsets` rebuilds ad set
+   revenue as `Σ roas × spend`.
+4. **Lifetime budgets are pro-rated** to a daily rate across their flight
+   (`dailyRate()` in `lib/adsReport.ts`). Pacing an 18-day window against an
+   eight-month lifetime expectation reports a meaningless few percent; without
+   flight dates pacing is reported unknown rather than guessed.
+
+Two changes were needed in shared code to make this work, and they fix live data
+too:
+
+- `ensureAccountForCampaign()` (`lib/meta.ts`) resolves the owning account from
+  the campaign row. `/api/db/campaign-detail` and `/api/db/periods` are called
+  with a campaign id alone, and previously fell back to `META_AD_ACCOUNT_ID` —
+  returning nothing for any campaign that account did not own.
+- `getDataSource()` selects `MergedDataSource` on `DATABASE_URL` alone. Gating
+  it on Meta env vars left the reasoning engine reading the seeded dataset.
+
+Tests: `npm run test:upload` (parsing/mapping always; persistence with
+`TEST_DATABASE_URL`, which exercises the real bulk inserts and read-back).
+
 ## 3. Live data flow
 
 ```
@@ -52,7 +106,7 @@ App Review and is out of scope.
 
 | Name | Required | Notes |
 |---|---|---|
-| `DATABASE_URL` | yes | Neon pooled connection string |
+| `DATABASE_URL` | yes | Neon pooled connection string. Also all that uploads need — no Meta credentials required. |
 | `META_ACCESS_TOKEN` | live only | System User token, `ads_read` |
 | `META_AD_ACCOUNT_ID` | live only | digits only, no `act_` prefix |
 | `META_CURRENCY` | live only | e.g. `INR` — without it money renders as `$` |

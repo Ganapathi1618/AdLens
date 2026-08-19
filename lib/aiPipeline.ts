@@ -17,6 +17,7 @@ import { buildEvidence, analyze, verifyCitations, ANALYST_SYSTEM, type Evidence 
 import { generateNarrative } from "./llm";
 import { dataSource } from "./datasource";
 import { LIVE_PREFIX, getLastSynced, useConnectedAccount } from "./meta";
+import { isUploadedCampaign } from "./uploads";
 import type { Campaign, AdSet } from "./data";
 
 export type QueryKind =
@@ -99,6 +100,8 @@ export interface RetrievalResult {
   /** Ad sets the question specifically named, when it named any. */
   focusedAdsets?: AdSet[];
   isLive: boolean;
+  /** True when the campaign's rows came from an uploaded file, not a sync. */
+  isUpload: boolean;
   syncedAt: string | null;
   refreshed: boolean;
   error?: string;
@@ -152,14 +155,14 @@ export async function retrieveData(
         } else if (age === Infinity) {
           // Never synced AND the refresh failed — there is nothing to answer from.
           return {
-            ok: false, isLive, syncedAt, refreshed: false,
+            ok: false, isLive, isUpload: false, syncedAt, refreshed: false,
             error: body?.error ?? body?.reason ?? "Could not retrieve data from the Meta Ads API.",
           };
         }
       } catch (e: unknown) {
         if (age === Infinity) {
           return {
-            ok: false, isLive, syncedAt, refreshed: false,
+            ok: false, isLive, isUpload: false, syncedAt, refreshed: false,
             error: e instanceof Error ? e.message : "Meta Ads API request failed.",
           };
         }
@@ -171,7 +174,7 @@ export async function retrieveData(
 
   const campaign = await dataSource.getCampaign(campaignId);
   if (!campaign) {
-    return { ok: false, isLive, syncedAt, refreshed, error: "Campaign not found." };
+    return { ok: false, isLive, isUpload: false, syncedAt, refreshed, error: "Campaign not found." };
   }
   const adsets = await dataSource.getAdsets(campaignId);
 
@@ -180,7 +183,7 @@ export async function retrieveData(
     ? adsets.filter((a) => wanted.some((w) => a.name.toLowerCase().includes(w) || w.includes(a.name.toLowerCase())))
     : [];
 
-  return { ok: true, campaign, adsets, focusedAdsets, isLive, syncedAt, refreshed };
+  return { ok: true, campaign, adsets, focusedAdsets, isLive, isUpload: isUploadedCampaign(campaign), syncedAt, refreshed };
 }
 
 /* ── Stage 4: context ─────────────────────────────────────────────── */
@@ -290,6 +293,17 @@ function taskHint(parsed: ParsedQuery): string {
   }
 }
 
+/**
+ * How the data reached us, in words the model is allowed to repeat.
+ *
+ * An uploaded report is a frozen extract; describing it as a live API read
+ * would let the narrative imply the numbers are current when they are not.
+ */
+export function sourceLabel(r: { isLive: boolean; isUpload: boolean }): string {
+  if (r.isUpload) return "uploaded report file (a frozen extract, not a live read)";
+  return r.isLive ? "Meta Ads API (live)" : "seeded dataset";
+}
+
 export async function generateAnswer(ctx: QueryContext, stages: string[]): Promise<PipelineAnswer> {
   const payload = {
     question: ctx.parsed.raw,
@@ -297,7 +311,7 @@ export async function generateAnswer(ctx: QueryContext, stages: string[]): Promi
     focusMetrics: ctx.parsed.metrics,
     namedEntities: ctx.parsed.entities,
     dataFreshness: {
-      source: ctx.retrieval.isLive ? "Meta Ads API (live)" : "seeded dataset",
+      source: sourceLabel(ctx.retrieval),
       syncedAt: ctx.retrieval.syncedAt,
       refreshedForThisQuestion: ctx.retrieval.refreshed,
     },

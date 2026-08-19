@@ -23,19 +23,39 @@ export default function Reporting() {
   const [compare, setCompare] = useState(false);
   const [preset, setPreset] = useState("Last month");
 
-  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; campaigns: typeof campaigns } | null>(null);
+  type Accessible = { id: string; name: string; currency: string; kind?: "graph" | "upload"; upload?: { filename: string; campaigns: number; days: number; dateStart: string | null; dateEnd: string | null } };
+  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; accessibleAccounts?: Accessible[]; campaigns: typeof campaigns } | null>(null);
+
+  // Re-fetched per selected account: an uploaded report only returns its own
+  // campaigns when it is the account being asked about.
   useEffect(() => {
-    fetch(`/api/db/accounts?t=${Date.now()}`, { cache: "no-store" }).then((r) => r.json()).then(setLive).catch(() => setLive({ configured: false, campaigns: [] as typeof campaigns }));
-  }, []);
-  const liveRow = live?.configured && live.account
+    const qs = new URLSearchParams({ t: String(Date.now()) });
+    if (acct.startsWith("live:")) qs.set("account", acct.slice(5));
+    fetch(`/api/db/accounts?${qs}`, { cache: "no-store" })
+      .then((r) => r.json()).then(setLive)
+      .catch(() => setLive({ configured: false, campaigns: [] as typeof campaigns }));
+  }, [acct]);
+
+  // Uploaded reports are selectable here exactly like connected accounts.
+  const uploadRows = (live?.accessibleAccounts ?? [])
+    .filter((a) => a.kind === "upload")
+    .map((a) => ({
+      id: `live:${a.id}`,
+      name: a.name,
+      sub: `Uploaded · ${a.upload?.filename ?? "report"} · ${a.upload?.campaigns ?? 0} campaigns${a.upload?.dateStart ? ` · ${a.upload.dateStart} → ${a.upload.dateEnd}` : ""}`,
+      plat: "meta" as const,
+      spend: a.currency,
+      camps: a.upload?.campaigns ?? 0,
+    }));
+  const liveRow = live?.configured && live.account && !acct.startsWith("live:")
     ? { id: "live", name: live.account.name, sub: `act_${live.account.id} · Meta · ${live.campaigns.length} live campaigns`, plat: "meta" as const, spend: `${live.account.currency}`, camps: live.campaigns.length }
     : null;
-  const allAccounts = liveRow ? [liveRow, ...ACCOUNTS] : ACCOUNTS;
+  const allAccounts = [...uploadRows, ...(liveRow ? [liveRow] : []), ...ACCOUNTS];
   const account = allAccounts.find((a) => a.id === acct) ?? allAccounts[0];
-  const usingLive = acct === "live";
+  const usingLive = acct === "live" || acct.startsWith("live:");
   const list = useMemo(() =>
     (usingLive ? (live?.campaigns ?? []) : campaigns.filter((c) => c.platform === acct && c.status === "Active")).filter((c) => c.name.toLowerCase().includes(q.toLowerCase())).slice(0, 6),
-    [acct, q]);  // eslint-disable-line react-hooks/exhaustive-deps
+    [acct, q, live, usingLive]);  // eslint-disable-line react-hooks/exhaustive-deps
 
   const Step = ({ n, label }: { n: number; label: string }) => (
     <div className="flex items-center gap-2 mb-2.5">
@@ -54,7 +74,7 @@ export default function Reporting() {
         {allAccounts.map((a) => (
           <button key={a.id} onClick={() => {
             setAcct(a.id);
-            const first = a.id === "live"
+            const first = a.id === "live" || a.id.startsWith("live:")
               ? live?.campaigns?.[0]
               : campaigns.find((c) => c.platform === a.id && c.status === "Active");
             if (first) setCamp(first.id);
