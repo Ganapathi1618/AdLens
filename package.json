@@ -8,9 +8,11 @@
     "start": "next start",
     "test:citations": "node tests/verify-citations.test.mjs",
     "test:intent": "node tests/intent.test.mjs",
-    "test": "npm run test:citations && npm run test:intent && npm run test:dates && npm run test:upload",
+    "test": "npm run test:citations && npm run test:intent && npm run test:dates && npm run test:upload && npm run test:auth && npm run test:alerts",
     "test:dates": "node tests/daterange.test.mjs",
-    "test:upload": "npx tsx tests/upload.test.mts"
+    "test:upload": "npx tsx tests/upload.test.mts",
+    "test:auth": "npx tsx tests/auth.test.mts",
+    "test:alerts": "npx tsx tests/alerts.test.mts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

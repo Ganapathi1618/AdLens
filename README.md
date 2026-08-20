@@ -44,6 +44,24 @@ Port already in use? `npm run dev -- -p 3001`.
 | Account wizard (+ Connect with Facebook) | `/check` |
 | Upload a report | `/upload` |
 
+### Required before deploying: a workspace password
+
+AdLens shows real ad account data and accepts uploads, so a public URL is a
+data leak rather than a demo. Set one variable:
+
+```bash
+APP_PASSWORD=something-long-and-random
+```
+
+Everything is gated behind it — every page and every API route — except the
+login endpoints, Meta's own data-deletion/deauthorize callbacks and the cron
+endpoint (which has its own `SYNC_SECRET`).
+
+Locally, `npm run dev` without `APP_PASSWORD` stays open so development needs
+no password. **In production a deployment with no `APP_PASSWORD` refuses to
+serve anything** and says so, rather than silently exposing the data. Changing
+the password signs everyone out.
+
 ### Optional: real Claude-powered AI chat
 
 Create a `.env.local` file in the project root:
@@ -119,7 +137,7 @@ Schema and storage details: [`db/upload.sql`](db/upload.sql).
 | **Cross-platform** | Meta vs LinkedIn, 3 plain metrics, visual bars, budget slider simulator |
 | **Reporting** | 3-step selection → report view with charts, comparison table, AI narrative, PDF export |
 | **Ledger** | Every recommendation → followed/ignored → measured outcome. 64% action rate, +31% avg improvement |
-| **Alerts** | Rules-engine alerts (ROAS/CTR/CPC/pacing thresholds) |
+| **Alerts** | Threshold rules evaluated against your stored daily metrics — break-even ROAS, CTR decline, rising cost per result, pacing, saturation, stalled delivery |
 | **Upload report** | No account access? Upload an Ads Manager export (.csv/.xlsx) and get the same analysis — see [Uploaded reports](#uploaded-reports) |
 | **Connect with Facebook** | Users add their own Meta ad accounts with one click — OAuth, no app setup or pasted tokens, unlimited accounts per deployment — see [CONNECT-META.md](CONNECT-META.md) |
 
@@ -128,6 +146,9 @@ Schema and storage details: [`db/upload.sql`](db/upload.sql).
 - `lib/data.ts` — seeded deterministic dataset (the MockAdapter). Swap for Prisma + Meta Graph API in Phase 1; every page reads through this layer.
 - `lib/aiPipeline.ts` — the AI query pipeline: parse → resolve → fetch live Meta data → build context → analyze → generate. The model is only called on data that was actually retrieved.
 - `app/api/ai/chat` — runs that pipeline. If retrieval fails or no model is configured it returns an explicit error; there is no templated answer path.
+- `lib/auth.ts` + `middleware.ts` — the access gate. Web Crypto only so it runs in Edge middleware; the signing key is derived from the password, so changing it invalidates every session.
+- `lib/alerts.ts` — threshold rules over stored daily metrics. A rule whose metric the data does not contain is skipped, never reported as passing.
+- `lib/dataMode.ts` — whether this deployment holds real data, resolved server-side. Invented demo figures are suppressed everywhere real numbers appear.
 - `lib/pacing.ts` — time-aware pacing (spend vs budget × elapsed time) for campaigns and ad sets.
 - `lib/status.ts` — Meta `effective_status` → Active / Paused / Archived / In Review.
 - `lib/periods.ts` — week-over-week and month-over-month. Ratios are recomputed from period totals (never averaged across days), and a comparison is withheld when either window lacks history.
