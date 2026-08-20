@@ -280,16 +280,25 @@ export async function buildEvidence(campaignId: string): Promise<Evidence | null
   // Live campaigns report their real sync time; the seeded "Today 02:00" string
   // must never be presented as the provenance of live data.
   let liveSnapshot: { syncedAt: string; mode: string } | null = null;
+  const { isUploadedCampaign } = await import("./uploads");
+  const uploaded = isUploadedCampaign(c);
   if (c.id.startsWith("meta_")) {
     const { getLastSynced } = await import("./meta");
     const ts = await getLastSynced();
-    liveSnapshot = { syncedAt: ts ?? "unknown — sync has not run", mode: "meta-live" };
+    liveSnapshot = uploaded
+      // An uploaded report is a frozen extract, not a sync. Saying "meta-live"
+      // here would let a confident narrative be written over stale figures.
+      ? { syncedAt: ts ?? "unknown", mode: "uploaded-report" }
+      : { syncedAt: ts ?? "unknown — sync has not run", mode: "meta-live" };
   }
 
   const currency = (c as unknown as { currency?: string }).currency ?? (c.id.startsWith("meta_") ? (process.env.META_CURRENCY ?? "USD") : "USD");
   const caveats: string[] = [];
   if (!revenueTracked) caveats.push(
     "This account reports no purchase/revenue value, so ROAS and revenue are unavailable — NOT zero-performing. Judge efficiency on CTR, CPC, frequency and conversion counts only. Never state or imply a 0x ROAS verdict."
+  );
+  if (uploaded) caveats.push(
+    "These figures come from a report file uploaded by the user, not a live API read. They are a frozen extract: describe them as of their date range, and never imply they are current. Any metric absent from that file is unavailable — never treat a zero as a measurement."
   );
   if (sets.length && sets.every(a => a.reachPct === 0)) caveats.push(
     "Audience reach % is not reported by the API for this account — do not make claims about audience saturation or 'untouched audience'."

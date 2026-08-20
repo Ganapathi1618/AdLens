@@ -1,6 +1,7 @@
 "use client";
 import { useEffect, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check as CheckIcon, Search } from "lucide-react";
 import { campaigns } from "@/lib/data";
@@ -42,7 +43,7 @@ export default function Check() {
   type LiveCamp = typeof campaigns[number];
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
-  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; campaigns: LiveCamp[]; liveError?: string | null; lastSynced?: string | null; accessibleAccounts?: { id: string; name: string; currency: string; timezone: string; status: number; business: string | null; connectionId?: string | null }[]; discoveryError?: string | null } | null>(null);
+  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; campaigns: LiveCamp[]; liveError?: string | null; lastSynced?: string | null; accessibleAccounts?: { id: string; name: string; currency: string; timezone: string; status: number; business: string | null; connectionId?: string | null; kind?: "graph" | "upload"; upload?: { filename: string; tier: string; level: string; granularity: string; dateStart: string | null; dateEnd: string | null; days: number; campaigns: number; uploadedAt: string } }[]; discoveryError?: string | null; uploadsOnly?: boolean } | null>(null);
   const chosenAccount = String(acctByPlat["meta"] ?? "");
   // Discovering live accounts calls the Meta Graph API, which is routinely a
   // few seconds — the picker must say so rather than looking like the demo
@@ -59,11 +60,17 @@ export default function Check() {
       .finally(() => setLoadingAccounts(false));
   }, [chosenAccount]);
 
+  // An uploaded report and a connected ad account are both selectable here, but
+  // they must never look alike: one is a frozen file, the other a live sync.
   const liveAccts = (live?.accessibleAccounts ?? []).map((a) => ({
     id: `live:${a.id}`,
     name: a.name,
-    sub: `act_${a.id} · ${a.currency} · ${a.timezone}${a.business ? ` · ${a.business}` : ""}${a.status !== 1 ? " · inactive" : ""}`,
+    kind: (a.kind ?? "graph") as "graph" | "upload",
+    sub: a.kind === "upload" && a.upload
+      ? `${a.upload.filename} · ${a.upload.campaigns} campaigns · ${a.upload.days}d${a.upload.dateStart ? ` (${a.upload.dateStart} → ${a.upload.dateEnd})` : ""} · ${a.currency}`
+      : `act_${a.id} · ${a.currency} · ${a.timezone}${a.business ? ` · ${a.business}` : ""}${a.status !== 1 ? " · inactive" : ""}`,
     connectionId: a.connectionId ?? null,
+    uploadedAt: a.kind === "upload" ? a.upload?.uploadedAt ?? null : null,
   }));
   async function syncNow(accountId: string) {
     setSyncing(true);
@@ -161,13 +168,14 @@ export default function Check() {
 
   // One shape for every row in the picker: demo accounts simply carry no
   // connectionId, which is what decides whether Disconnect is offered.
-  type PickerAccount = { id: string; name: string; sub: string; connectionId?: string | null };
+  type PickerAccount = { id: string; name: string; sub: string; connectionId?: string | null; kind?: "graph" | "upload"; uploadedAt?: string | null };
   const liveAcct: PickerAccount[] = liveAccts.length === 0 && live?.configured && live.account
-    ? [{ id: "live", name: live.account.name, sub: `act_${live.account.id} · ${live.account.currency}`, connectionId: null }]
+    ? [{ id: "live", name: live.account.name, sub: `act_${live.account.id} · ${live.account.currency}`, connectionId: null, kind: "graph" }]
     : liveAccts;
   const accountsFor = (pid: string): PickerAccount[] =>
     pid === "meta" ? [...liveAcct, ...(ACCOUNTS[pid] ?? [])] : ACCOUNTS[pid] ?? [];
   const usingLive = String(acctByPlat["meta"] ?? "").startsWith("live");
+  const usingUpload = liveAcct.some((a) => a.id === acctByPlat["meta"] && a.kind === "upload");
   const pool = usingLive ? (live?.campaigns ?? []) : campaigns;
   const curSym = sym(live?.account?.currency);
   useEffect(() => {
@@ -286,10 +294,15 @@ export default function Check() {
                         {acctByPlat[pid] === a.id && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
                       </span>
                       <div><div className="text-[13.5px] font-bold flex items-center gap-1.5">{a.name}
-                        {String(a.id).startsWith("live") && <span className="pill-good">Live</span>}
+                        {a.kind === "upload"
+                          ? <span className="pill-accent">Uploaded</span>
+                          : String(a.id).startsWith("live") && <span className="pill-good">Live</span>}
                       </div><div className="text-[11px] text-mut font-medium">
                         {a.sub}
-                        {String(a.id).startsWith("live") && live?.lastSynced && (
+                        {a.kind === "upload" && a.uploadedAt && (
+                          <span className="text-mut">{" · "}uploaded {new Date(a.uploadedAt).toLocaleString()}</span>
+                        )}
+                        {a.kind !== "upload" && String(a.id).startsWith("live") && live?.lastSynced && (
                           <span className={stale ? "text-warn font-bold" : "text-mut"}>
                             {" · "}synced {new Date(live.lastSynced).toLocaleString()}
                             {stale && ` (${Math.floor((syncAgeHours ?? 0) / 24)}d ago — nightly sync may not be running)`}
@@ -297,7 +310,12 @@ export default function Check() {
                         )}
                       </div></div>
                       <span className="ml-auto flex items-center gap-2">
-                        {String(a.id).startsWith("live") && (
+                        {a.kind === "upload" ? (
+                          <Link href="/upload" onClick={(e) => e.stopPropagation()}
+                            className="text-[11px] font-bold px-2.5 py-1.5 rounded-lg border border-line2 hover:bg-raised">
+                            Re-upload
+                          </Link>
+                        ) : String(a.id).startsWith("live") && (
                           <button
                             onClick={(e) => { e.stopPropagation(); syncNow(String(a.id).startsWith("live:") ? String(a.id).slice(5) : ""); }}
                             disabled={syncing}
@@ -314,11 +332,13 @@ export default function Check() {
                             {disconnecting === a.connectionId ? "Disconnecting…" : "Disconnect"}
                           </button>
                         )}
-                        {String(a.id).startsWith("live")
-                          ? (activeCampaignCount > 0
-                              ? <StatusBadge s="Active" />
-                              : <NoActiveCampaigns total={live?.campaigns?.length ?? 0} />)
-                          : <StatusBadge s="Active" />}
+                        {a.kind === "upload"
+                          ? null
+                          : String(a.id).startsWith("live")
+                            ? (activeCampaignCount > 0
+                                ? <StatusBadge s="Active" />
+                                : <NoActiveCampaigns total={live?.campaigns?.length ?? 0} />)
+                            : <StatusBadge s="Active" />}
                       </span>
                     </button>
                   ))}
@@ -370,6 +390,13 @@ export default function Check() {
                         Connected as {conn!.connections.map((c) => c.fbUserName || c.id).join(", ")} — use Disconnect on an account above to revoke access.
                       </div>
                     )}
+
+                    <div className="mt-3 pt-3 border-t border-line flex items-center justify-between gap-3 flex-wrap">
+                      <div className="text-[11.5px] text-mut font-medium">
+                        <strong className="text-ink">No account access?</strong> Upload an Ads Manager export instead — same analysis, no credentials.
+                      </div>
+                      <Link href="/upload" className="btn-ghost shrink-0">Upload a report →</Link>
+                    </div>
                   </div>
                 )}
               </div>
@@ -392,9 +419,11 @@ export default function Check() {
             </div>
             {singleList.length === 0 && (
               <div className="card p-4 mb-4 text-[13px] text-mut">
-                {usingLive
-                  ? <>No live campaigns are synced for <strong className="text-ink">{live?.account?.name ?? "this account"}</strong> yet. Run <code className="text-accent">/api/sync/meta?days=30</code>, then reload this page. {live?.liveError && <span className="text-bad">Reported error: {live.liveError}</span>}</>
-                  : <>No campaigns match “{search}”.</>}
+                {usingLive && usingUpload
+                  ? <>No campaigns could be read from that uploaded report. <Link href="/upload" className="text-accent font-bold">Check the column mapping</Link> and upload it again. {live?.liveError && <span className="text-bad">Reported error: {live.liveError}</span>}</>
+                  : usingLive
+                    ? <>No live campaigns are synced for <strong className="text-ink">{live?.account?.name ?? "this account"}</strong> yet. Run <code className="text-accent">/api/sync/meta?days=30</code>, then reload this page. {live?.liveError && <span className="text-bad">Reported error: {live.liveError}</span>}</>
+                    : <>No campaigns match “{search}”.</>}
               </div>
             )}
             <div className="card overflow-hidden divide-y divide-line mb-5 max-h-[360px] overflow-y-auto">

@@ -127,11 +127,16 @@ export function getDataSource(): DataSource {
     case "mock": // explicit demo-only
       return new MockDataSource();
     default:
-      // When a live account is connected, MergedDataSource is the correct default:
-      // it routes by id prefix (meta_* → live, everything else → seeded), so Demo
-      // Mode and Live Mode both work without depending on an env var being set.
-      // Without credentials it is exactly MockDataSource.
-      return process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID
+      // MergedDataSource routes by id prefix (meta_* → live, everything else →
+      // seeded), so Demo Mode and Live Mode both work without an env var.
+      //
+      // DATABASE_URL alone is enough to select it. Uploaded reports live in the
+      // same tables under their own ad account and carry the same meta_ prefix,
+      // but a deployment that only ever uploads has no Meta credentials — gating
+      // on those would leave the reasoning engine, the AI pipeline and
+      // /api/db/periods reading the seeded dataset and reporting every uploaded
+      // campaign as "not found". Any live failure still degrades to seeded.
+      return (process.env.META_ACCESS_TOKEN && process.env.META_AD_ACCOUNT_ID) || process.env.DATABASE_URL
         ? new MergedDataSource()
         : new MockDataSource();
   }

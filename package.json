@@ -8,8 +8,9 @@
     "start": "next start",
     "test:citations": "node tests/verify-citations.test.mjs",
     "test:intent": "node tests/intent.test.mjs",
-    "test": "npm run test:citations && npm run test:intent && npm run test:dates",
-    "test:dates": "node tests/daterange.test.mjs"
+    "test": "npm run test:citations && npm run test:intent && npm run test:dates && npm run test:upload",
+    "test:dates": "node tests/daterange.test.mjs",
+    "test:upload": "npx tsx tests/upload.test.mts"
   },
   "dependencies": {
     "@fontsource-variable/inter": "^5.2.8",

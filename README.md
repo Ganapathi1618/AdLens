@@ -42,6 +42,7 @@ Port already in use? `npm run dev -- -p 3001`.
 | Today's brief | `/` |
 | Campaign portfolio | `/overview` |
 | Account wizard (+ Connect with Facebook) | `/check` |
+| Upload a report | `/upload` |
 
 ### Optional: real Claude-powered AI chat
 
@@ -73,6 +74,39 @@ automatically on first use — no migration step. Full setup: [CONNECT-META.md](
 > Without `DATABASE_URL` everything still works, but connected accounts live
 > in memory and reset when the server restarts.
 
+## Uploaded reports
+
+You do not need Meta account access to use AdLens. Go to **`/upload`**, drop in an
+Ads Manager export (`.csv`, `.tsv` or `.xlsx`), and every screen works on it —
+KPIs, trends, ad set drill-down, pacing, week-over-week and the AI analysis.
+
+Only `DATABASE_URL` is required. No token, no OAuth, no app review.
+
+**The preview is the point.** Before anything is saved, the upload screen names
+what your file supports and, for everything it does not, why:
+
+| Tier | What you get |
+|---|---|
+| **Full analysis** | Ad-level rows with a daily breakdown and a fatigue signal — everything, including creative fatigue detection |
+| **Trends only** | Daily rows without ad-level detail — KPIs, trends, pacing, period comparison, but no creative diagnosis |
+| **Snapshot only** | One row per entity, no daily breakdown — KPI totals and nothing else |
+
+For the deepest analysis export **by Day** at the **Ad** level with Amount spent,
+Impressions, Link clicks, Frequency, Results and Conversion value.
+
+Two rules the importer never breaks:
+
+- **A missing column is never a zero.** A file without impressions has no CTR —
+  it does not have a CTR of 0%. Absent metrics are reported as unavailable
+  everywhere, including to the model.
+- **Uploaded data is never presented as live.** It is labelled with its filename
+  and date range on every screen, and the AI is told it is a frozen extract.
+
+Ratios are recomputed from period totals, lifetime budgets are pro-rated across
+their flight so a one-month export paces against its own share of the budget,
+and re-uploading a corrected export replaces the batch instead of doubling it.
+Schema and storage details: [`db/upload.sql`](db/upload.sql).
+
 ## What's inside
 
 | Page | What it does |
@@ -86,6 +120,7 @@ automatically on first use — no migration step. Full setup: [CONNECT-META.md](
 | **Reporting** | 3-step selection → report view with charts, comparison table, AI narrative, PDF export |
 | **Ledger** | Every recommendation → followed/ignored → measured outcome. 64% action rate, +31% avg improvement |
 | **Alerts** | Rules-engine alerts (ROAS/CTR/CPC/pacing thresholds) |
+| **Upload report** | No account access? Upload an Ads Manager export (.csv/.xlsx) and get the same analysis — see [Uploaded reports](#uploaded-reports) |
 | **Connect with Facebook** | Users add their own Meta ad accounts with one click — OAuth, no app setup or pasted tokens, unlimited accounts per deployment — see [CONNECT-META.md](CONNECT-META.md) |
 
 ## Architecture
@@ -96,6 +131,8 @@ automatically on first use — no migration step. Full setup: [CONNECT-META.md](
 - `lib/pacing.ts` — time-aware pacing (spend vs budget × elapsed time) for campaigns and ad sets.
 - `lib/status.ts` — Meta `effective_status` → Active / Paused / Archived / In Review.
 - `lib/periods.ts` — week-over-week and month-over-month. Ratios are recomputed from period totals (never averaged across days), and a comparison is withheld when either window lacks history.
+- `lib/adsReport.ts` — uploaded export → the app's own shapes: column mapping, capability tiering, and normalisation. `lib/xlsx.ts` is a dependency-free .xlsx reader; `lib/csv.ts` is the single place a cell becomes a number or a date, so .csv and .xlsx can never disagree.
+- `lib/uploads.ts` — an uploaded report is stored as a synthetic ad account in the same `meta_*` tables, so it reuses the entire live read path rather than duplicating it.
 - `app/api/cron/sync` — nightly 02:00 UTC sync of **every** account, OAuth-connected and env-credential alike (schedule in `vercel.json`).
 - `lib/store.ts` — Zustand: selected campaign drives AI panel visibility (only shows after a campaign is chosen).
 

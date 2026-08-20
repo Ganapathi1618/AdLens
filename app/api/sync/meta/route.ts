@@ -32,6 +32,22 @@ export async function GET(req: Request) {
   // Explicit account selection — the platform is not tied to one configured
   // account, so any account the credential can reach may be requested.
   const accountParam = url.searchParams.get("account");
+
+  // An uploaded report is stored as a synthetic ad account. Syncing one is
+  // meaningless — there is no token behind it — and a sync that fell through
+  // to the env account here would write another account's campaigns into the
+  // uploaded batch. Refuse explicitly rather than relying on that not happening.
+  {
+    const { isUploadAccount } = await import("@/lib/uploads");
+    if (isUploadAccount(accountParam)) {
+      return NextResponse.json({
+        synced: false,
+        kind: "upload_account",
+        error: "That is an uploaded report, not a connected ad account. To refresh it, upload a new export from the Uploads page.",
+      }, { status: 400 });
+    }
+  }
+
   // Prefer an OAuth-connected credential for this account; setActiveAccount
   // alone would pair the requested account with the wrong (env) token.
   const { useConnectedAccount, setActiveAccount } = await import("@/lib/meta");
