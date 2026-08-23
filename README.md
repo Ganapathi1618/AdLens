@@ -2,25 +2,30 @@
 
 Know **why** your campaign is underperforming — in one click, not 40 minutes of Ads Manager digging.
 
-Built for HackAdTech – AI. Next.js 14 · TypeScript · Tailwind · Framer Motion · Recharts · Zustand.
+Next.js 14 · TypeScript · Tailwind · Framer Motion · Recharts · Zustand.
 
 ## Run it locally
 
-**Prerequisite:** Node.js 18.17 or newer (`node -v` to check). Nothing else — no
-database, no Docker, no API keys.
+**Prerequisites:** Node.js 18.17 or newer (`node -v` to check), and a Postgres
+connection string in `DATABASE_URL` — Neon's free tier is enough.
 
 ```bash
-# 1. unzip / clone, then from the project folder:
+# 1. clone, then from the project folder:
 npm install          # ~1 min
 
-# 2. start the dev server
+# 2. point it at a database
+echo 'DATABASE_URL=postgres://…' >> .env.local
+
+# 3. start the dev server
 npm run dev          # → http://localhost:3000
 ```
 
-Open **http://localhost:3000** and you're in. The app runs on a deterministic
-seeded dataset (55 campaigns, 230+ ad sets, 90 days of metrics with embedded
-fatigue / saturation / ROAS-crash patterns), so every screen has realistic data
-on first load.
+AdLens shows only data you bring it — there is no sample dataset. On first run
+every page is empty until you either **connect an ad account** (`/check`) and
+sync it, or **upload an Ads Manager export** (`/upload`). Uploading needs no
+Meta credentials at all and is the fastest way to see the whole app working.
+
+Tables are created on first use; there is no migration step.
 
 Other commands:
 
@@ -112,7 +117,7 @@ Schema and storage details: [`db/upload.sql`](db/upload.sql).
 | Page | What it does |
 |---|---|
 | **Home** | Today's Brief — Needs action / Watch / Opportunity cards + money-on-the-table strip |
-| **Campaign overview** | Portfolio KPI strip (animated counters), 55 campaigns with sparklines, health dots, pacing bars, animated sort/filter/search |
+| **Campaign overview** | Portfolio KPI strip (animated counters), your campaigns with sparklines, health dots, pacing bars, animated sort/filter/search |
 | **Account check** | Platform → account → campaign wizard; 1 platform = deep dive, 2+ = cross-platform |
 | **Analysis** | KPI strip, pacing gauge, anomaly chips, timeline presets (Daily/Weekly/Monthly/Overall/Custom), compare-periods A/B panel, 4 tabs |
 | **Adset drill-down** | Per-adset KPIs, CTR/CPA trends, ad cards with Scale/Pause/Monitor, AI insight |
@@ -125,7 +130,7 @@ Schema and storage details: [`db/upload.sql`](db/upload.sql).
 
 ## Architecture
 
-- `lib/data.ts` — seeded deterministic dataset (the MockAdapter). Swap for Prisma + Meta Graph API in Phase 1; every page reads through this layer.
+- `lib/types.ts` — the shared domain types (`Campaign`, `AdSet`, `AdItem`). No values live here; every page reads through `lib/datasource.ts`.
 - `lib/aiPipeline.ts` — the AI query pipeline: parse → resolve → fetch live Meta data → build context → analyze → generate. The model is only called on data that was actually retrieved.
 - `app/api/ai/chat` — runs that pipeline. If retrieval fails or no model is configured it returns an explicit error; there is no templated answer path.
 - `lib/pacing.ts` — time-aware pacing (spend vs budget × elapsed time) for campaigns and ad sets.

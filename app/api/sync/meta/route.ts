@@ -83,8 +83,8 @@ export async function GET(req: Request) {
   if (!metaConfigured()) {
     return NextResponse.json({
       synced: false,
-      mode: "seeded-only",
-      reason: "META_ACCESS_TOKEN / META_AD_ACCOUNT_ID not set — app keeps running on seeded data.",
+      mode: "not-configured",
+      reason: "META_ACCESS_TOKEN / META_AD_ACCOUNT_ID not set — connect an ad account, or upload a report instead.",
     });
   }
 

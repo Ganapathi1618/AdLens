@@ -4,7 +4,7 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { Check as CheckIcon, Search } from "lucide-react";
-import { campaigns } from "@/lib/data";
+import type { Campaign } from "@/lib/types";
 import { useApp } from "@/lib/store";
 import { PlatBadge, StatusBadge, NoActiveCampaigns } from "@/components/Badge";
 import PageHeader from "@/components/PageHeader";
@@ -13,34 +13,21 @@ import { sym } from "@/lib/currency";
 
 const PLATFORMS = [
   { id: "meta", name: "Meta", color: "#1877F2", enabled: true },
-  { id: "li", name: "LinkedIn", color: "#0A66C2", enabled: true },
+  { id: "li", name: "LinkedIn", color: "#0A66C2", enabled: false },
   { id: "google", name: "Google Ads", color: "#EA4335", enabled: false },
   { id: "tiktok", name: "TikTok", color: "#8b93a8", enabled: false },
 ];
-const ACCOUNTS: Record<string, { id: string; name: string; sub: string }[]> = {
-  meta: [
-    { id: "m1", name: "Acme Corp — Main (demo)", sub: "act_12345678 · $4.2k/mo · synthetic benchmark" },
-    { id: "m2", name: "Acme Corp — Brand (demo)", sub: "act_87654321 · $1.1k/mo · synthetic benchmark" },
-  ],
-  li: [
-    { id: "l1", name: "Acme Corp LinkedIn", sub: "id_509876543 · $2.8k/mo" },
-    { id: "l2", name: "Acme Talent Brand", sub: "id_509811111 · $0.9k/mo" },
-  ],
-};
-
 export default function Check() {
   const router = useRouter();
   const setCampaign = useApp((s) => s.setCampaign);
   const [step, setStep] = useState(0);
   const [plats, setPlats] = useState<string[]>(["meta"]);
-  const [acctByPlat, setAcctByPlat] = useState<Record<string, string>>({ meta: "m1", li: "l1" });
-  const [camp, setCamp] = useState("summer-sale");
-  const [campByPlat, setCampByPlat] = useState<Record<string, string>>({ meta: "summer-sale", li: "leadgen" });
+  const [acctByPlat, setAcctByPlat] = useState<Record<string, string>>({});
+  const [camp, setCamp] = useState("");
   const [search, setSearch] = useState("");
-  const cross = plats.length >= 2;
 
   // ── Live connected account (real Meta data) ──────────────────────
-  type LiveCamp = typeof campaigns[number];
+  type LiveCamp = Campaign;
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
   const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; campaigns: LiveCamp[]; liveError?: string | null; lastSynced?: string | null; accessibleAccounts?: { id: string; name: string; currency: string; timezone: string; status: number; business: string | null; connectionId?: string | null; kind?: "graph" | "upload"; upload?: { filename: string; tier: string; level: string; granularity: string; dateStart: string | null; dateEnd: string | null; days: number; campaigns: number; uploadedAt: string } }[]; discoveryError?: string | null; uploadsOnly?: boolean } | null>(null);
@@ -166,29 +153,25 @@ export default function Check() {
     }
   }
 
-  // One shape for every row in the picker: demo accounts simply carry no
-  // connectionId, which is what decides whether Disconnect is offered.
+  // One shape for every row in the picker. connectionId is what decides
+  // whether Disconnect is offered — an env-credential account carries none.
   type PickerAccount = { id: string; name: string; sub: string; connectionId?: string | null; kind?: "graph" | "upload"; uploadedAt?: string | null };
   const liveAcct: PickerAccount[] = liveAccts.length === 0 && live?.configured && live.account
     ? [{ id: "live", name: live.account.name, sub: `act_${live.account.id} · ${live.account.currency}`, connectionId: null, kind: "graph" }]
     : liveAccts;
-  const accountsFor = (pid: string): PickerAccount[] =>
-    pid === "meta" ? [...liveAcct, ...(ACCOUNTS[pid] ?? [])] : ACCOUNTS[pid] ?? [];
-  const usingLive = String(acctByPlat["meta"] ?? "").startsWith("live");
+  const accountsFor = (pid: string): PickerAccount[] => (pid === "meta" ? liveAcct : []);
   const usingUpload = liveAcct.some((a) => a.id === acctByPlat["meta"] && a.kind === "upload");
-  const pool = usingLive ? (live?.campaigns ?? []) : campaigns;
+  const pool = live?.campaigns ?? [];
   const curSym = sym(live?.account?.currency);
   useEffect(() => {
-    if (usingLive && live?.campaigns?.length) setCamp(live.campaigns[0].id);
-    if (!usingLive) setCamp("summer-sale");
-  }, [usingLive, live]);
+    setCamp(live?.campaigns?.length ? live.campaigns[0].id : "");
+  }, [live]);
 
   const singleList = pool.filter((c) => plats.includes(c.platform) && c.name.toLowerCase().includes(search.toLowerCase())).slice(0, 8);
   const accountsChosen = plats.every((p) => acctByPlat[p]);
 
   const go = () => {
-    if (cross) { router.push(`/compare?meta=${campByPlat.meta}&li=${campByPlat.li}`); return; }
-    const c = pool.find((x) => x.id === camp) ?? campaigns.find((x) => x.id === camp);
+    const c = pool.find((x) => x.id === camp);
     if (!c) return;
     setCampaign(c.id, c.name);
     router.push(`/analysis/${c.id}`);
@@ -221,7 +204,7 @@ export default function Check() {
           <motion.div key="p" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
             <div className="section-label mb-2">Select one or more platforms</div>
             <div className="text-[13px] text-mut rounded-xl px-4 py-3 mb-4 border border-accent/25" style={{ background: "var(--accent-soft)" }}>
-              💡 One platform → single-campaign deep dive. Two+ → cross-platform comparison, one account &amp; campaign per platform.
+              💡 Pick the platform your ad account lives on, then the account and the campaign to analyse.
             </div>
             <div className="grid grid-cols-2 gap-3 mb-4">
               {PLATFORMS.map((p) => {
@@ -248,7 +231,7 @@ export default function Check() {
             </div>
             <motion.p key={plats.length} initial={{ opacity: 0 }} animate={{ opacity: 1 }}
               className={clsx("text-[12.5px] font-bold mb-5", plats.length === 0 ? "text-bad" : "text-accent")}>
-              {plats.length === 0 ? "⚠ Select at least one platform" : cross ? `✓ ${plats.length} platforms → cross-platform comparison` : "✓ 1 platform → single campaign analysis"}
+              {plats.length === 0 ? "⚠ Select a platform" : "✓ Single campaign analysis"}
             </motion.p>
             <div className="flex justify-end">
               <button disabled={plats.length === 0} onClick={() => setStep(1)} className="btn-primary">Next: Select account →</button>
@@ -258,7 +241,6 @@ export default function Check() {
 
         {step === 1 && (
           <motion.div key="a" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
-            {cross && <div className="text-[13px] text-mut rounded-xl px-4 py-3 mb-4 border border-accent/25" style={{ background: "var(--accent-soft)" }}>⇄ Cross-platform mode — select <strong className="text-ink">one ad account per platform</strong>.</div>}
             {plats.map((pid) => (
               <div key={pid} className="mb-5">
                 <div className="section-label mb-2 flex items-center gap-1.5">
@@ -409,7 +391,7 @@ export default function Check() {
           </motion.div>
         )}
 
-        {step === 2 && !cross && (
+        {step === 2 && (
           <motion.div key="c" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
             <div className="text-[13px] text-mut rounded-xl px-4 py-3 mb-3 border border-accent/25" style={{ background: "var(--accent-soft)" }}>🎯 Single platform — select <strong className="text-ink">one campaign</strong> to analyse in depth.</div>
             <div className="relative mb-3">
@@ -419,10 +401,10 @@ export default function Check() {
             </div>
             {singleList.length === 0 && (
               <div className="card p-4 mb-4 text-[13px] text-mut">
-                {usingLive && usingUpload
+                {usingUpload
                   ? <>No campaigns could be read from that uploaded report. <Link href="/upload" className="text-accent font-bold">Check the column mapping</Link> and upload it again. {live?.liveError && <span className="text-bad">Reported error: {live.liveError}</span>}</>
-                  : usingLive
-                    ? <>No live campaigns are synced for <strong className="text-ink">{live?.account?.name ?? "this account"}</strong> yet. Run <code className="text-accent">/api/sync/meta?days=30</code>, then reload this page. {live?.liveError && <span className="text-bad">Reported error: {live.liveError}</span>}</>
+                  : pool.length === 0
+                    ? <>No campaigns are synced for <strong className="text-ink">{live?.account?.name ?? "this account"}</strong> yet. Use <strong className="text-ink">Sync now</strong> on the account above, or <Link href="/upload" className="text-accent font-bold">upload a report</Link>. {live?.liveError && <span className="text-bad">Reported error: {live.liveError}</span>}</>
                     : <>No campaigns match “{search}”.</>}
               </div>
             )}
@@ -446,36 +428,6 @@ export default function Check() {
           </motion.div>
         )}
 
-        {step === 2 && cross && (
-          <motion.div key="x" initial={{ opacity: 0, x: 24 }} animate={{ opacity: 1, x: 0 }} exit={{ opacity: 0, x: -24 }}>
-            <div className="text-[13px] text-mut rounded-xl px-4 py-3 mb-3 border border-accent/25" style={{ background: "var(--accent-soft)" }}>⇄ Select <strong className="text-ink">one campaign per platform</strong> from the accounts you chose.</div>
-            {plats.map((pid) => (
-              <div key={pid} className="mb-5">
-                <div className="section-label mb-2 flex items-center gap-1.5">
-                  <span className="w-2 h-2 rounded-full" style={{ background: PLATFORMS.find((p) => p.id === pid)!.color }} />
-                  {PLATFORMS.find((p) => p.id === pid)!.name} · {accountsFor(pid).find(a => a.id === acctByPlat[pid])?.name} — pick one campaign
-                </div>
-                <div className="card overflow-hidden divide-y divide-line">
-                  {campaigns.filter((c) => c.platform === pid && c.status === "Active").slice(0, 3).map((c) => (
-                    <button key={c.id} onClick={() => setCampByPlat({ ...campByPlat, [pid]: c.id })}
-                      className={clsx("w-full flex items-center gap-3 px-4 py-3.5 text-left transition-colors", campByPlat[pid] === c.id ? "" : "hover:bg-raised")}
-                      style={campByPlat[pid] === c.id ? { background: "var(--accent-soft)" } : undefined}>
-                      <span className={clsx("w-[18px] h-[18px] rounded-full border-2 grid place-items-center shrink-0", campByPlat[pid] === c.id ? "border-accent bg-accent" : "border-line2 bg-surface")}>
-                        {campByPlat[pid] === c.id && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
-                      </span>
-                      <div className="text-[13.5px] font-bold">{c.name}</div>
-                      <span className="ml-auto text-[11px] text-mut font-medium num">${c.spend.toLocaleString()} · {c.roas}x</span>
-                    </button>
-                  ))}
-                </div>
-              </div>
-            ))}
-            <div className="flex justify-between">
-              <button onClick={() => setStep(1)} className="btn-ghost">← Back</button>
-              <button onClick={go} className="btn-primary">Compare platforms →</button>
-            </div>
-          </motion.div>
-        )}
       </AnimatePresence>
     </div>
   );

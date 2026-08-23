@@ -5,8 +5,7 @@ import Link from "next/link";
 import { motion, AnimatePresence } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, BarChart, Bar, CartesianGrid, AreaChart, Area } from "recharts";
 import { FileText, Wallet, DollarSign, Target, MousePointerClick, Coins, Repeat, TrendingUp, Activity, Users, RefreshCw } from "lucide-react";
-import { getCampaign, adsetsFor, series30 } from "@/lib/data";
-import type { Campaign, AdSet } from "@/lib/data";
+import type { Campaign, AdSet } from "@/lib/types";
 import { sym } from "@/lib/currency";
 import { PRESETS as RANGE_PRESETS, type PresetKey } from "@/lib/daterange";
 import { resultLadder, actionLabel, CORE_METRICS, type MetricKey } from "@/lib/meta-labels";
@@ -39,16 +38,12 @@ const VERDICT: Record<string, { text: string; cls: string }> = {
   broad: { text: "Steady — leave it running", cls: "pill-accent" },
 };
 
-// Seeded demo keeps its original presets; live campaigns use the real
-// platform-defined ranges resolved in the ad account's timezone.
-const PRESETS = ["Daily", "Weekly", "Monthly", "Overall", "Custom"] as const;
 
 export default function Analysis({ params }: { params: { id: string } }) {
   const { id } = params;
   const router = useRouter();
   const { setCampaign } = useApp();
 
-  const isLive = id.startsWith("meta_");
   const [rangeKey, setRangeKey] = useState<PresetKey>("last_30");
   const [customSince, setCustomSince] = useState("");
   const [customUntil, setCustomUntil] = useState("");
@@ -57,7 +52,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
   const [pickerOpen, setPickerOpen] = useState(false);
   const [loadingRange, setLoadingRange] = useState(false);
 
-  const [liveData, setLiveData] = useState<{ campaign: Campaign; adsets: AdSet[]; series: { day: string; ctr: number; cpa: number; spend: number; revenue: number }[]; currency: string; adsetError?: string | null; seriesError?: string | null; adsetsInAccount?: { id: string; name: string; campaignId: string; campaignName: string | null; days: number }[]; range?: { since: string; until: string; days: number; label: string; metaPreset: string | null }; coverage?: { requested: { since: string; until: string; days: number }; returned: { since: string | null; until: string | null; days: number }; complete: boolean; empty: boolean }; provenance?: { kind: "upload" | "graph" | "seeded"; label: string; detail: string | null; tier: string | null; capabilities: { key: string; label: string; available: boolean; reason: string }[]; warnings: string[]; uploadedAt: string | null; accountId: string }; timezone?: string } | null>(null);
+  const [liveData, setLiveData] = useState<{ campaign: Campaign; adsets: AdSet[]; series: { day: string; ctr: number; cpa: number; spend: number; revenue: number }[]; currency: string; adsetError?: string | null; seriesError?: string | null; adsetsInAccount?: { id: string; name: string; campaignId: string; campaignName: string | null; days: number }[]; range?: { since: string; until: string; days: number; label: string; metaPreset: string | null }; coverage?: { requested: { since: string; until: string; days: number }; returned: { since: string | null; until: string | null; days: number }; complete: boolean; empty: boolean }; provenance?: { kind: "upload" | "graph"; label: string; detail: string | null; tier: string | null; capabilities: { key: string; label: string; available: boolean; reason: string }[]; warnings: string[]; uploadedAt: string | null; accountId: string }; timezone?: string } | null>(null);
   const [liveErr, setLiveErr] = useState(false);
   const [syncing, setSyncing] = useState(false);
   const [syncMsg, setSyncMsg] = useState<string | null>(null);
@@ -80,7 +75,6 @@ export default function Analysis({ params }: { params: { id: string } }) {
     }
   }
   useEffect(() => {
-    if (!isLive) return;
     if (rangeKey === "custom" && !(customSince && customUntil)) return;
     setLoadingRange(true);
     setRangeError(null);
@@ -95,15 +89,15 @@ export default function Analysis({ params }: { params: { id: string } }) {
       .then((d) => { setLiveData(d); setLiveErr(false); })
       .catch((e) => { setRangeError(e?.message ?? "failed to load range"); setLiveErr(true); })
       .finally(() => setLoadingRange(false));
-  }, [id, isLive, rangeKey, customSince, customUntil]);
+  }, [id, rangeKey, customSince, customUntil]);
 
   // Provenance drives more than a label: metrics absent from an uploaded file
   // must read as "not reported", never as a measured 0.
   const isUpload = liveData?.provenance?.kind === "upload";
   const unavailable = (liveData?.provenance?.capabilities ?? []).filter((cap) => !cap.available);
 
-  const c = isLive ? liveData?.campaign ?? null : getCampaign(id) ?? null;
-  const cur = sym(isLive ? liveData?.currency ?? c?.currency : "USD");
+  const c = liveData?.campaign ?? null;
+  const cur = sym(liveData?.currency ?? c?.currency);
   const [tab, setTab] = useState<"overview" | "trends" | "adsets" | "ads" | "audience">("overview");
 
   // Real WoW / MoM for this campaign, computed server-side from the daily
@@ -128,42 +122,28 @@ export default function Analysis({ params }: { params: { id: string } }) {
   }, [id]);
   const [compare, setCompare] = useState(false);
 
-  const [preset, setPreset] = useState<(typeof PRESETS)[number]>("Monthly");
-  const [from, setFrom] = useState("2025-06-01");
-  const [to, setTo] = useState("2025-06-30");
   const [aFrom, setAFrom] = useState("");
   const [aTo, setATo] = useState("");
   const [bFrom, setBFrom] = useState("");
   const [bTo, setBTo] = useState("");
   const [bManual, setBManual] = useState(false);
-  const [fetchNote, setFetchNote] = useState<string | null>(null);
-  const onDemand = (f: string, t: string) => {
-    setFetchNote(`Fetching ${f} → ${t} on demand…`);
-    setTimeout(() => setFetchNote("Range cached ✓ — future queries are instant"), 800);
-    setTimeout(() => setFetchNote(null), 3200);
-  };
 
   useEffect(() => { if (c) setCampaign(c.id, c.name); }, [c, setCampaign]);
 
-  const full = useMemo(() => (isLive ? (liveData?.series ?? []) : series30(id)), [isLive, liveData, id]);
-  const data = useMemo(() => {
-    if (isLive) return full;
-    if (preset === "Daily") return full.slice(-1 * 2);
-    if (preset === "Weekly") return full.slice(-7);
-    return full;
-  }, [full, preset, isLive]);
+  const full = useMemo(() => liveData?.series ?? [], [liveData]);
+  const data = full;
 
   const allDates = full.map((d) => String((d as Record<string, unknown>).date ?? "")).filter(Boolean);
 
   useEffect(() => {
-    if (!isLive || allDates.length < 2 || aFrom) return;
+    if (allDates.length < 2 || aFrom) return;
     const m = Math.floor(allDates.length / 2);
     setAFrom(allDates[m]); setATo(allDates[allDates.length - 1]);
     setBFrom(allDates[0]); setBTo(allDates[Math.max(m - 1, 0)]);
-  }, [isLive, allDates.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [allDates.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   useEffect(() => {
-    if (!isLive || bManual || !aFrom || !aTo || allDates.length < 2) return;
+    if (bManual || !aFrom || !aTo || allDates.length < 2) return;
     const iFrom = allDates.indexOf(aFrom), iTo = allDates.indexOf(aTo);
     if (iFrom < 0 || iTo < iFrom) return;
     const len = iTo - iFrom + 1;
@@ -171,10 +151,10 @@ export default function Analysis({ params }: { params: { id: string } }) {
     if (bEnd < 0) { setBFrom(""); setBTo(""); return; }
     const bStart = Math.max(0, bEnd - len + 1);
     setBFrom(allDates[bStart]); setBTo(allDates[bEnd]);
-  }, [isLive, bManual, aFrom, aTo, allDates.length]); // eslint-disable-line react-hooks/exhaustive-deps
+  }, [bManual, aFrom, aTo, allDates.length]); // eslint-disable-line react-hooks/exhaustive-deps
 
   const rangeKpis = (() => {
-    if (!isLive || !data.length) return null;
+    if (!data.length) return null;
     const sum = (k: "spend" | "revenue" | "impressions" | "clicks" | "conversions") =>
       data.reduce((t, d) => t + Number((d as Record<string, unknown>)[k] ?? 0), 0);
     const spend = sum("spend"), rev = sum("revenue");
@@ -196,7 +176,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
       to: (data[data.length - 1] as Record<string, unknown>).date ?? data[data.length - 1].day,
     };
   })();
-  const revTracked = !isLive || (rangeKpis?.hasData ? (rangeKpis.revenue ?? 0) > 0 : false);
+  const revTracked = rangeKpis?.hasData ? (rangeKpis.revenue ?? 0) > 0 : false;
   const availableActions = (() => {
     const totals: Record<string, number> = {};
     for (const a of (liveData?.adsets ?? []) as (AdSet & { actionTotals?: Record<string, number> })[]) {
@@ -253,11 +233,11 @@ export default function Analysis({ params }: { params: { id: string } }) {
   });
   const primarySet = (liveData?.adsets ?? [])[0] as (AdSet & { optimizationGoal?: string; destinationType?: string }) | undefined;
   const ladder = resultLadder(c?.objective, primarySet?.optimizationGoal, primarySet?.destinationType);
-  const resultsLabel = isLive ? ladder.label : "Conv.";
+  const resultsLabel = ladder.label;
   const fmtMoney = (v: number | null | undefined) => (v == null ? na : `${cur}${v.toLocaleString()}`);
 
-  const sets = isLive ? (liveData?.adsets ?? []) : adsetsFor(id);
-  if (isLive && !liveData && !liveErr) return (
+  const sets = liveData?.adsets ?? [];
+  if (!liveData && !liveErr) return (
     <div className="p-10 max-w-6xl mx-auto">
       <div className="h-8 w-64 rounded-lg bg-raised animate-pulse mb-6" />
       <div className="grid grid-cols-6 gap-3 mb-5">{Array.from({ length: 6 }).map((_, i) => <div key={i} className="h-28 rounded-2xl bg-raised animate-pulse" />)}</div>
@@ -273,7 +253,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
     const ds = String((d as Record<string, unknown>).date ?? "");
     return ds >= lo && ds <= hi;
   };
-  const useCustomWindows = isLive && compare && aFrom && aTo && bFrom && bTo;
+  const useCustomWindows = compare && aFrom && aTo && bFrom && bTo;
   const perA = useCustomWindows ? full.filter((d) => inWindow(d, aFrom, aTo)) : full.slice(0, mid);
   const perB = useCustomWindows ? full.filter((d) => inWindow(d, bFrom, bTo)) : full.slice(mid);
   const div = (num: number, den: number) => (den > 0 ? num / den : 0);
@@ -297,7 +277,6 @@ export default function Analysis({ params }: { params: { id: string } }) {
   if (ctrDeltaPts < -0.05) anomalies.push({ text: `CTR down ${Math.abs(ctrDeltaPts).toFixed(2)}pts WoW`, tone: "bad" });
   const tot = (a: typeof full, k: "spend" | "revenue" | "ctr") => a.reduce((s, d) => s + (d[k] as number), 0);
 
-  const onTo = (v: string) => setTo(v < from ? from : v);
 
   // Campaign health score — derived from adset health + anomalies.
   const healthScore = sets.length
@@ -310,9 +289,6 @@ export default function Analysis({ params }: { params: { id: string } }) {
   // Creative score for an ad: CTR weight + ROAS weight − fatigue penalty.
   const creativeScore = (ad: { ctr: number; roas: number; freq: number | null }) =>
     Math.max(3, Math.min(98, Math.round(ad.ctr * 22 + ad.roas * 10 - Math.max(0, (ad.freq ?? 0) - 4) * 8)));
-
-  const worst = [...sets].sort((x, y) => x.roas - y.roas)[0];
-  const best = [...sets].sort((x, y) => y.roas - x.roas)[0];
 
   const KPI_ICONS = [Wallet, MousePointerClick, Coins, Activity, DollarSign, Target, Repeat, TrendingUp];
 
@@ -333,7 +309,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
             detail={anomalies.length ? `${anomalies.length} ${anomalies.length === 1 ? "anomaly" : "anomalies"} detected` : "no anomalies in window"} />
           <div className="flex flex-col gap-2 items-end">
             <div className="flex items-center gap-2">
-              {isLive && (isUpload ? (
+              {isUpload ? (
                 <Link href="/upload" className="btn-ghost" title="Replace this report with a newer export">
                   <RefreshCw size={13} /> Re-upload report
                 </Link>
@@ -342,7 +318,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
                   <RefreshCw size={13} className={syncing ? "animate-spin" : undefined} />
                   {syncing ? "Syncing…" : "Sync campaign"}
                 </button>
-              ))}
+              )}
               <button onClick={() => router.push("/reporting")} className="btn-primary"><FileText size={14} /> Generate report</button>
             </div>
             {syncMsg && <div className="text-[11px] font-semibold text-accent">{syncMsg}</div>}
@@ -357,21 +333,11 @@ export default function Analysis({ params }: { params: { id: string } }) {
         </div>
       </motion.div>
 
-      {/* ── AI summary (seeded demo only — live gets no fabricated verdicts) ── */}
-      {!isLive && worst && best && (
-        <AISummary meta={`checked ${sets.length} ad sets`} cta="See the fix" onCta={() => setTab("adsets")}>
-          {worst.health === "critical"
-            ? <><strong>{worst.name}</strong> is your leak — {worst.roas}x ROAS on {cur}{worst.spend.toLocaleString()} spend, driven by one fatigued creative. Meanwhile <strong>{best.name}</strong> returns {best.roas}x with headroom. Move budget from the first to the second: est. <strong>+{cur}640–1,280/week</strong>.</>
-            : <>All ad sets healthy. <strong>{best.name}</strong> leads at {best.roas}x — consider scaling it while frequency stays low.</>}
-        </AISummary>
-      )}
-
       {/* ── Range controls ────────────────────────────────────── */}
       <div className="flex items-center gap-2.5 flex-wrap mb-5">
         {!compare ? (
           <>
-            {isLive ? (
-              <div className="flex flex-wrap items-center gap-1.5">
+            <div className="flex flex-wrap items-center gap-1.5">
                 <div className="flex rounded-xl border border-line2 bg-surface p-1">
                   {RANGE_PRESETS.map((rp) => (
                     <button key={rp.key} onClick={() => setRangeKey(rp.key)}
@@ -395,39 +361,19 @@ export default function Analysis({ params }: { params: { id: string } }) {
                 )}
                 {loadingRange && <span className="text-[12px] text-mut animate-pulse">loading…</span>}
                 {rangeError && <span className="text-[12px] text-bad font-bold">{rangeError}</span>}
-              </div>
-            ) : (
-              <div className="flex rounded-xl border border-line2 bg-surface p-1">
-                {PRESETS.map((p) => (
-                  <button key={p} onClick={() => setPreset(p)} className={clsx("relative text-[12px] font-bold px-3.5 py-1.5 rounded-lg", preset === p ? "text-white" : "text-mut hover:text-ink")}>
-                    {preset === p && <motion.span layoutId="preset-pill" className="absolute inset-0 rounded-lg" style={{ background: "var(--hero-grad)" }} transition={{ type: "spring", stiffness: 400, damping: 34 }} />}
-                    <span className="relative z-10">{p}</span>
-                  </button>
-                ))}
-              </div>
-            )}
-            {preset === "Custom" ? (
-              <div className="flex items-center gap-1.5 text-[12px]">
-                <input type="date" value={from} onChange={(e) => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); onDemand(e.target.value, to); }} className="border border-line2 rounded-xl px-2.5 py-1.5 bg-surface" />
-                <span className="text-mut">to</span>
-                <input type="date" value={to} min={from} onChange={(e) => { onTo(e.target.value); onDemand(from, e.target.value); }} className="border border-line2 rounded-xl px-2.5 py-1.5 bg-surface" />
-              </div>
-            ) : (
-              <span className="text-[12px] text-mut font-medium">{isLive
-                ? (liveData?.coverage?.empty
-                    ? `${liveData?.range?.label ?? "selected range"} — no data in this period`
-                    : `${liveData?.range?.since} → ${liveData?.range?.until} · ${liveData?.coverage?.returned.days ?? 0} of ${liveData?.range?.days ?? 0} days with data${liveData?.timezone ? ` · ${liveData.timezone}` : ""}`)
-                : preset === "Daily" ? "Today · hourly" : preset === "Weekly" ? "Last 7 days" : preset === "Monthly" ? "Jun 1 – Jun 30, 2025" : "All time"}</span>
-            )}
+            </div>
+            <span className="text-[12px] text-mut font-medium">
+              {liveData?.coverage?.empty
+                ? `${liveData?.range?.label ?? "selected range"} — no data in this period`
+                : `${liveData?.range?.since} → ${liveData?.range?.until} · ${liveData?.coverage?.returned.days ?? 0} of ${liveData?.range?.days ?? 0} days with data${liveData?.timezone ? ` · ${liveData.timezone}` : ""}`}
+            </span>
             <span className="pill-mut" title={liveData?.provenance?.detail ?? undefined}>
               {isUpload
                 ? `${liveData?.provenance?.label ?? "Uploaded report"} · ${full.length}d`
-                : isLive ? `Live · Meta Graph API · ${full.length}d synced` : "Snapshot · Today 02:00"}
+                : `Live · Meta Graph API · ${full.length}d synced`}
             </span>
-            {fetchNote && <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className={clsx("text-[11px] font-bold", fetchNote.includes("✓") ? "text-good" : "text-accent")}>{fetchNote}</motion.span>}
           </>
         ) : (
-          isLive ? (
             <div className="flex flex-wrap items-center gap-2 text-[12px]">
               <span className="font-bold text-accent">Period A</span>
               <input type="date" value={aFrom} min={dates[0]} max={dates[dates.length - 1]}
@@ -461,9 +407,6 @@ export default function Analysis({ params }: { params: { id: string } }) {
               </span>
               <span className="text-mut">· data available {dates[0]} → {dates[dates.length - 1]}</span>
             </div>
-          ) : (
-            <span className="pill-accent">Comparing Period A (Jun 1–15) vs Period B (Jun 16–30)</span>
-          )
         )}
       </div>
 
@@ -486,7 +429,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
         </div>
       )}
 
-      {isLive && liveData?.coverage?.empty && (
+      {liveData?.coverage?.empty && (
         <div className="card p-4 mb-4 text-[13px]">
           <strong>No data for {liveData?.range?.label}.</strong>{" "}
           <span className="text-mut">
@@ -496,7 +439,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
           </span>
         </div>
       )}
-      {isLive && liveData?.coverage && !liveData.coverage.empty && !liveData.coverage.complete && (
+      {liveData?.coverage && !liveData.coverage.empty && !liveData.coverage.complete && (
         <div className="rounded-2xl border border-warn/40 p-3.5 mb-4 text-[12px]" style={{ background: "var(--warn-soft)" }}>
           <strong className="text-warn">Partial period.</strong>{" "}
           <span className="text-mut">
@@ -507,7 +450,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
       )}
 
       {/* Results by ad set — each on its own optimisation goal. */}
-      {isLive && (liveData?.adsets?.length ?? 0) > 0 && (
+      {(liveData?.adsets?.length ?? 0) > 0 && (
         <div className="card p-4 mb-4">
           <div className="text-[14px] font-bold mb-0.5">Results by ad set</div>
           <div className="text-[12px] text-mut mb-3">
@@ -530,7 +473,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
       )}
 
       {/* Provenance strip — which account, campaign, range, currency. */}
-      {isLive && rangeKpis?.hasData && (
+      {rangeKpis?.hasData && (
         <details className="mb-4 group">
           <summary className="cursor-pointer text-[12px] font-bold text-mut hover:text-ink inline-flex items-center gap-1.5 select-none">
             Data provenance <span className="text-[10px] group-open:rotate-90 transition-transform">▶</span>
@@ -563,8 +506,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
       )}
 
       {/* Metric picker — built from what the platform actually reported. */}
-      {isLive && (
-        <div className="mb-3 flex items-center gap-2 flex-wrap">
+      <div className="mb-3 flex items-center gap-2 flex-wrap">
           <button onClick={() => setPickerOpen((v) => !v)} className="btn-ghost !py-1.5 !text-[12px]">
             {pickerOpen ? "Done" : "Customise metrics"}
           </button>
@@ -609,35 +551,32 @@ export default function Analysis({ params }: { params: { id: string } }) {
               </div>
             </div>
           )}
-        </div>
-      )}
+      </div>
 
       {/* ── KPI hero row ──────────────────────────────────────── */}
       <div className="grid grid-cols-6 gap-3 mb-4">
-        {isLive && rangeKpis ? (
+        {rangeKpis ? (
           chosenCards.map(([label, value, alert], i) => {
             const Icon = KPI_ICONS[i % KPI_ICONS.length];
             return <KpiHero key={String(label)} i={i} label={String(label)} rawValue={String(value)} icon={Icon} alert={!!alert} />;
           })
         ) : (
           ([
-            ["Spend", `${cur}${c.spend.toLocaleString()}`, "↑12%", Wallet, false],
-            ["Revenue", `${cur}${c.revenue.toLocaleString()}`, "↑7%", DollarSign, false],
-            ["ROAS", `${c.roas}x`, "↓0.9x", Target, c.roas < 1.5 || id === "summer-sale"],
-            ["CTR", `${c.ctr}%`, "↓0.3pts", MousePointerClick, false],
-            ["CPC", `${cur}${c.cpc}`, "↑$0.62", Coins, false],
-            [resultsLabel, String(c.conv), "↑8%", Activity, false],
-          ] as [string, string, string, typeof Wallet, boolean][]).map(([l, v, d, Icon, alert], i) => {
-            const t = tone(l.toLowerCase(), d);
-            return <KpiHero key={l} i={i} label={l} rawValue={v} icon={Icon} alert={alert}
-              delta={d} deltaTone={t === "good" ? "good" : t === "bad" ? "bad" : "neutral"} />;
-          })
+            ["Spend", `${cur}${c.spend.toLocaleString()}`, Wallet, false],
+            ["Revenue", c.revenue > 0 ? `${cur}${c.revenue.toLocaleString()}` : "N/A", DollarSign, false],
+            ["ROAS", c.roas > 0 ? `${c.roas}x` : "N/A", Target, c.roas > 0 && c.roas < 1.5],
+            ["CTR", `${c.ctr}%`, MousePointerClick, false],
+            ["CPC", `${cur}${c.cpc}`, Coins, false],
+            [resultsLabel, String(c.conv), Activity, false],
+          ] as [string, string, typeof Wallet, boolean][]).map(([l, v, Icon, alert], i) => (
+            <KpiHero key={l} i={i} label={l} rawValue={v} icon={Icon} alert={alert} />
+          ))
         )}
       </div>
 
       {/* ── Pacing + anomalies ────────────────────────────────── */}
       <div className="grid grid-cols-[290px_1fr] gap-3 mb-5">
-        <PacingCard pacing={isLive && c.pacing === 0 ? 0 : c.pacing} spend={c.spend} cur={cur} />
+        <PacingCard pacing={c.pacing} spend={c.spend} cur={cur} />
         {anomalies.length > 0 ? (
           <div className="card p-4 border-bad/25 relative overflow-hidden">
             <span className="absolute left-0 top-0 bottom-0 w-1 bg-bad" />
@@ -687,7 +626,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
               {compare && (
                 <div className="mb-4">
                   <div className="rounded-2xl px-4 py-3 text-[13px] mb-3 border border-accent/25" style={{ background: "var(--accent-soft)" }}>
-                    <span className="font-bold text-accent">Period A</span> {isLive ? `${aFrom || "—"} → ${aTo || "—"}` : "Jun 1–15"} &nbsp;vs&nbsp; <span className="font-bold text-good">Period B</span> {isLive ? (bFrom ? `${bFrom} → ${bTo}` : "no earlier period with data") : "Jun 16–30"}
+                    <span className="font-bold text-accent">Period A</span> {`${aFrom || "—"} → ${aTo || "—"}`} &nbsp;vs&nbsp; <span className="font-bold text-good">Period B</span> {bFrom ? `${bFrom} → ${bTo}` : "no earlier period with data"}
                   </div>
                   <div className="grid grid-cols-2 gap-3 mb-3">
                     <ChartCard title={`${revTracked ? "Revenue" : "Daily spend"} — A vs B`}>
@@ -766,17 +705,17 @@ export default function Analysis({ params }: { params: { id: string } }) {
                   <div className="card p-4 text-[13px] leading-relaxed text-mut">
                     <span className="font-bold text-ink">What changed: </span>
                     {canComparePeriods
-                      ? <>Period B {cmpLabel} ({cmpB.toFixed(cmpUnit === "%" ? 2 : 1)}{cmpUnit}) vs Period A ({cmpA.toFixed(cmpUnit === "%" ? 2 : 1)}{cmpUnit}) — {perA.length}d vs {perB.length}d. {!revTracked && "Revenue isn't reported for this account, so the comparison uses CTR. "}{isLive ? (cmpB < cmpA ? "The second half declined — see the adset table for where the drop concentrated." : "The second half improved.") : (roasB < roasA ? "The second half declined — the 25–44 Male creative fatigue hit mid-month and dragged blended efficiency down." : "The second half improved as top adsets scaled.")}</>
+                      ? <>Period B {cmpLabel} ({cmpB.toFixed(cmpUnit === "%" ? 2 : 1)}{cmpUnit}) vs Period A ({cmpA.toFixed(cmpUnit === "%" ? 2 : 1)}{cmpUnit}) — {perA.length}d vs {perB.length}d. {!revTracked && "Revenue isn't reported for this account, so the comparison uses CTR. "}{cmpB < cmpA ? "The second half declined — see the adset table for where the drop concentrated." : "The second half improved."}</>
                       : <>Not enough history yet ({full.length} day{full.length === 1 ? "" : "s"} synced). A period comparison needs at least 6 days.</>}
                   </div>
                 </div>
               )}
               <div className="grid grid-cols-2 gap-3">
-                <ChartCard title="CTR & CPA" sub={`${preset.toLowerCase()} view`} icon={MousePointerClick}>
+                <ChartCard title="CTR & CPA" sub={liveData?.range?.label ?? "selected range"} icon={MousePointerClick}>
                   <ResponsiveContainer width="100%" height={200}>
                     <LineChart data={data}>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" vertical={false} />
-                      <XAxis dataKey="day" tick={AXIS_TICK} interval={preset === "Weekly" ? 0 : 5} axisLine={false} tickLine={false} />
+                      <XAxis dataKey="day" tick={AXIS_TICK} interval={data.length <= 14 ? 0 : 5} axisLine={false} tickLine={false} />
                       <YAxis yAxisId="l" tick={AXIS_TICK} width={30} axisLine={false} tickLine={false} />
                       <YAxis yAxisId="r" orientation="right" tick={AXIS_TICK} width={32} axisLine={false} tickLine={false} />
                       <Tooltip contentStyle={TOOLTIP_STYLE} />
@@ -799,7 +738,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
                         </linearGradient>
                       </defs>
                       <CartesianGrid strokeDasharray="3 3" stroke="var(--grid)" vertical={false} />
-                      <XAxis dataKey="day" tick={AXIS_TICK} interval={preset === "Weekly" ? 0 : 5} axisLine={false} tickLine={false} />
+                      <XAxis dataKey="day" tick={AXIS_TICK} interval={data.length <= 14 ? 0 : 5} axisLine={false} tickLine={false} />
                       <YAxis tick={AXIS_TICK} width={40} axisLine={false} tickLine={false} />
                       <Tooltip contentStyle={TOOLTIP_STYLE} />
                       <Area dataKey="revenue" stroke="var(--chart-good)" fill="url(#revGrad)" strokeWidth={2.5} name="Revenue" />
@@ -1008,7 +947,7 @@ export default function Analysis({ params }: { params: { id: string } }) {
       </AnimatePresence>
 
       {/* ── Insight cards from adset intelligence ─────────────── */}
-      {!isLive && sets.length > 0 && tab !== "adsets" && (
+      {sets.length > 0 && tab !== "adsets" && (
         <div className="mt-5 space-y-2.5">
           <div className="section-label mb-1">AI insights — {sets.length} ad sets analysed</div>
           {sets.map((a, i) => (

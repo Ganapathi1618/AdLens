@@ -5,7 +5,7 @@
 // set, nothing in this file ever executes.
 
 import { getSql } from "./db";
-import type { Campaign, AdSet, AdItem } from "./data";
+import type { Campaign, AdSet, AdItem } from "./types";
 import type { DayPoint } from "./datasource";
 import { resultLadder } from "./meta-labels";
 import { computePacing, daysBetween, daysElapsedSince, type Pacing } from "./pacing";
@@ -57,7 +57,7 @@ export async function useConnectedAccount(accountId?: string | null): Promise<bo
   return false;
 }
 
-export const LIVE_PREFIX = "meta_"; // live ids can never collide with seeded ids
+export const LIVE_PREFIX = "meta_"; // every campaign id the app handles carries it
 
 /* ── Schema drift guard ─────────────────────────────────────────────
    db/meta-sync.sql created the ORIGINAL columns; the code has since grown to
@@ -351,7 +351,7 @@ function prettyObjective(o?: string): string {
 }
 
 const MONTHS = ["Jan", "Feb", "Mar", "Apr", "May", "Jun", "Jul", "Aug", "Sep", "Oct", "Nov", "Dec"];
-// "2026-07-19" → "Jul 19" (matches the seeded DayPoint.day format, no Date-parsing pitfalls)
+// "2026-07-19" → "Jul 19" (the DayPoint.day label format, no Date-parsing pitfalls)
 function prettyDay(iso: string): string {
   const [, m, d] = iso.split("-");
   return `${MONTHS[Number(m) - 1] ?? "?"} ${Number(d)}`;
@@ -570,7 +570,7 @@ function toCampaign(row: LiveRow): Campaign {
   // carried alongside so the UI can explain "no budget" instead of showing 0%.
   const pacing = pacingResult.percent ?? 0;
 
-  // spark: last ≤7 daily spends normalized 0–100, left-padded to 7 like seeded rows
+  // spark: last ≤7 daily spends normalized 0–100, left-padded to 7
   const last7 = days.slice(-7).map((d) => d.spend);
   const max = Math.max(...last7, 0);
   const spark = Array(Math.max(0, 7 - last7.length))
@@ -1108,7 +1108,7 @@ const pctDelta = (now: number, then: number) =>
 
 const avg = (a: number[]) => (a.length ? a.reduce((s, n) => s + n, 0) / a.length : 0);
 
-// Consecutive-day CTR decline, same rule the engine uses on seeded data.
+// Consecutive-day CTR decline, the same rule the reasoning engine applies.
 function consecutiveFalls(trend: number[]): number {
   let falls = 0;
   for (let i = trend.length - 1; i > 0; i--) {
@@ -1457,7 +1457,7 @@ export async function fetchAccountInfo(force = false): Promise<AccountInfo | nul
   }
 }
 
-/** Real last-sync timestamp from sync_log — replaces the seeded "Today 02:00". */
+/** Real last-sync timestamp from sync_log. */
 export async function getLastSynced(): Promise<string | null> {
   // An uploaded batch was never "synced" — the honest timestamp is when the
   // file was uploaded, which is also what the staleness warning should use.

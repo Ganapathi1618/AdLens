@@ -2,13 +2,11 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Home, LayoutGrid, FileText, BookOpen, Bell, Search, Zap, TrendingUp, Upload } from "lucide-react";
+import { Home, LayoutGrid, FileText, BookOpen, Bell, Search, Zap, Upload } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import clsx from "clsx";
-import { useApp } from "@/lib/store";
-import { alerts } from "@/lib/data";
 
-const groups: { label: string; items: { href: string; label: string; icon: typeof Home; badge?: number }[] }[] = [
+const groups: { label: string; items: { href: string; label: string; icon: typeof Home }[] }[] = [
   {
     label: "Workspace",
     items: [
@@ -23,14 +21,12 @@ const groups: { label: string; items: { href: string; label: string; icon: typeo
     items: [
       { href: "/reporting", label: "Reports", icon: FileText },
       { href: "/ledger", label: "Ledger", icon: BookOpen },
-      { href: "/alerts", label: "Alerts", icon: Bell, badge: alerts.length },
+      { href: "/alerts", label: "Alerts", icon: Bell },
     ],
   },
 ];
 
 export default function Sidebar() {
-  const activeCampaign = useApp((st) => st.campaignId);
-  const liveMode = Boolean(activeCampaign && activeCampaign.startsWith("meta_"));
   const path = usePathname();
 
   return (
@@ -52,7 +48,7 @@ export default function Sidebar() {
           <div key={g.label}>
             <div className="section-label px-2.5 mb-1.5">{g.label}</div>
             <div className="space-y-0.5">
-              {g.items.map(({ href, label, icon: Icon, badge }) => {
+              {g.items.map(({ href, label, icon: Icon }) => {
                 const active = href === "/" ? path === "/" : path.startsWith(href);
                 return (
                   <Link key={href} href={href} className={clsx(
@@ -63,9 +59,6 @@ export default function Sidebar() {
                       transition={{ type: "spring", stiffness: 380, damping: 32 }} />}
                     <Icon size={16} className="relative z-10" strokeWidth={active ? 2.4 : 2} />
                     <span className="relative z-10">{label}</span>
-                    {badge != null && badge > 0 && (
-                      <span className="relative z-10 ml-auto min-w-[20px] h-[20px] px-1 grid place-items-center rounded-full bg-bad text-white text-[10px] font-bold">{badge}</span>
-                    )}
                   </Link>
                 );
               })}
@@ -73,22 +66,9 @@ export default function Sidebar() {
           </div>
         ))}
 
-        <div className="px-1 pt-1">
-          <div className="rounded-2xl border border-line p-3.5" style={{ background: "var(--hero-grad-soft)" }}>
-            <div className="flex items-center gap-1.5 text-[11px] font-bold text-accent mb-1"><TrendingUp size={13} /> This week</div>
-            <div className="text-[13px] font-bold num">+$4,210 recovered</div>
-            <div className="text-[11px] text-mut leading-snug mt-0.5">from followed AI recommendations</div>
-            <Link href="/ledger" className="text-[11px] font-bold text-accent inline-block mt-2 hover:underline">View ledger →</Link>
-          </div>
-        </div>
       </nav>
 
-      <div className="p-3 border-t border-line flex items-center justify-between">
-        <span className="text-[10px] font-semibold text-mut flex items-center gap-1.5">
-          {liveMode
-            ? <><span className="w-1.5 h-1.5 rounded-full bg-good inline-block animate-pulse" />Live · Meta</>
-            : <><span className="w-1.5 h-1.5 rounded-full bg-accent inline-block" />Demo data</>}
-        </span>
+      <div className="p-3 border-t border-line flex items-center justify-end">
         <ThemeToggle />
       </div>
     </aside>

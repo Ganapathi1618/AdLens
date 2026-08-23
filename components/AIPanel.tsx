@@ -84,7 +84,7 @@ export default function AIPanel() {
               </span>
               <div className="flex-1">
                 <h3 className="font-bold text-[15px] leading-tight">AI Performance Analyst</h3>
-                <div className="text-[11px] text-mut font-medium">{campaignId?.startsWith("meta_") ? "Live · Meta Graph API" : "Snapshot · Today 02:00"} · answers cite your data</div>
+                <div className="text-[11px] text-mut font-medium">Live · Meta Graph API · answers cite your data</div>
               </div>
               <button onClick={() => setAiOpen(false)} className="w-8 h-8 rounded-lg grid place-items-center text-mut hover:text-ink hover:bg-raised transition-colors"><X size={17} /></button>
             </div>
@@ -118,7 +118,7 @@ export default function AIPanel() {
                         {m.engine === "scope-guard" && <span className="ml-1.5 text-mut">· scope guard</span>}
                         {m.retrieval && (
                           <span className="ml-1.5 text-mut">
-                            · {m.retrieval.live ? "live Meta data" : "seeded data"}
+                            · {m.retrieval.live ? "live Meta data" : "uploaded report"}
                             {m.retrieval.refreshed && " (re-synced for this question)"}
                           </span>
                         )}
