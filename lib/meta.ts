@@ -8,7 +8,7 @@ import { getSql } from "./db";
 import type { Campaign, AdSet, AdItem } from "./types";
 import type { DayPoint } from "./datasource";
 import { resultLadder } from "./meta-labels";
-import { computePacing, daysBetween, daysElapsedSince, type Pacing } from "./pacing";
+import { computePacing, flightPacing, daysBetween, daysElapsedSince, type Pacing } from "./pacing";
 import { mapMetaStatus } from "./status";
 import { UPLOAD_NOTE } from "./uploads";
 export { resultLadder }; // type-only import — no runtime cycle
@@ -481,6 +481,12 @@ type LiveRow = {
   /** 'graph' for a synced campaign, 'upload' for one read from a file. Drives
    *  the provenance label — uploaded numbers must never read as live ones. */
   data_source?: string | null;
+  /** Flight-to-date pacing from an uploaded tracker. Null for synced rows,
+   *  which are paced from their daily metrics instead. */
+  flight_budget?: number | null;
+  flight_days_total?: number | null;
+  flight_days_elapsed?: number | null;
+  flight_status_reported?: string | null;
   metrics: (MetaInsightRow & { conv_value?: number })[]; // per-day, oldest → newest
 };
 
@@ -557,15 +563,27 @@ function toCampaign(row: LiveRow): Campaign {
   // Previously this was last-night's spend ÷ daily budget, which ignored time
   // entirely and read 0% whenever the budget lived at ad set level.
   const deliveredDays = days.filter((d) => num(d.spend) > 0).length || days.length;
-  const pacingResult = computePacing({
-    spend,
-    dailyBudget: row.daily_budget,
-    lifetimeBudget: num(row.lifetime_budget),
-    daysElapsed: row.lifetime_budget
-      ? daysElapsedSince(row.start_time, row.stop_time) || deliveredDays
-      : deliveredDays,
-    totalDays: daysBetween(row.start_time, row.stop_time),
-  });
+  // An uploaded pacing tracker reports CUMULATIVE spend against a flight
+  // budget and states its own position in that flight, so it is paced on its
+  // own basis. Running it through the window path below would compare a
+  // month's spend to a single day's expectation.
+  const pacingResult = row.flight_budget != null && num(row.flight_budget) > 0
+    ? flightPacing({
+        spend,
+        budget: num(row.flight_budget),
+        daysTotal: row.flight_days_total != null ? num(row.flight_days_total) : null,
+        daysElapsed: row.flight_days_elapsed != null ? num(row.flight_days_elapsed) : null,
+        reportedStatus: row.flight_status_reported ?? null,
+      })
+    : computePacing({
+        spend,
+        dailyBudget: row.daily_budget,
+        lifetimeBudget: num(row.lifetime_budget),
+        daysElapsed: row.lifetime_budget
+          ? daysElapsedSince(row.start_time, row.stop_time) || deliveredDays
+          : deliveredDays,
+        totalDays: daysBetween(row.start_time, row.stop_time),
+      });
   // Campaign.pacing stays a number for existing consumers; the full object is
   // carried alongside so the UI can explain "no budget" instead of showing 0%.
   const pacing = pacingResult.percent ?? 0;
@@ -628,6 +646,7 @@ function toCampaign(row: LiveRow): Campaign {
 const LIVE_SELECT_ONE = (metaId: string) => getSql()`
   SELECT c.id, c.name, c.status, c.objective, c.daily_budget,
          c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source,
+         c.flight_budget, c.flight_days_total, c.flight_days_elapsed, c.flight_status_reported,
          COALESCE(json_agg(json_build_object(
            'date', to_char(m.date, 'YYYY-MM-DD'),
            'spend', m.spend, 'impressions', m.impressions, 'clicks', m.clicks,
@@ -638,7 +657,8 @@ const LIVE_SELECT_ONE = (metaId: string) => getSql()`
   LEFT JOIN meta_daily_metrics m ON m.campaign_id = c.id
   WHERE c.id = ${metaId} AND c.ad_account_id = ${currentAccountId()}
   GROUP BY c.id, c.name, c.status, c.objective, c.daily_budget,
-           c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source`;
+           c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source,
+         c.flight_budget, c.flight_days_total, c.flight_days_elapsed, c.flight_status_reported`;
 
 /**
  * Every ad account this token can actually read — discovered from the
@@ -724,6 +744,10 @@ export async function loadLiveCampaigns(): Promise<Campaign[]> {
       start_time: r.start_time ? String(r.start_time) : null,
       stop_time: r.stop_time ? String(r.stop_time) : null,
       data_source: r.data_source ? String(r.data_source) : null,
+      flight_budget: r.flight_budget != null ? num(r.flight_budget) : null,
+      flight_days_total: r.flight_days_total != null ? num(r.flight_days_total) : null,
+      flight_days_elapsed: r.flight_days_elapsed != null ? num(r.flight_days_elapsed) : null,
+      flight_status_reported: r.flight_status_reported ? String(r.flight_status_reported) : null,
       metrics: normalizeMetrics(r.metrics),
       account_currency: cur,
     })
@@ -740,6 +764,7 @@ async function loadLiveCampaignRowsFull() {
   const rows = (await getSql()`
     SELECT c.id, c.name, c.status, c.objective, c.daily_budget,
            c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source,
+         c.flight_budget, c.flight_days_total, c.flight_days_elapsed, c.flight_status_reported,
            COALESCE(json_agg(json_build_object(
              'date', to_char(m.date, 'YYYY-MM-DD'),
              'spend', m.spend, 'impressions', m.impressions, 'clicks', m.clicks,
@@ -750,7 +775,8 @@ async function loadLiveCampaignRowsFull() {
     LEFT JOIN meta_daily_metrics m ON m.campaign_id = c.id
     WHERE c.ad_account_id = ${currentAccountId()}
     GROUP BY c.id, c.name, c.status, c.objective, c.daily_budget,
-             c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source
+             c.effective_status, c.lifetime_budget, c.start_time, c.stop_time, c.data_source,
+         c.flight_budget, c.flight_days_total, c.flight_days_elapsed, c.flight_status_reported
     ORDER BY c.name`) as unknown as Record<string, any>[];
   await loadBudgetCache();
   return rows;
@@ -836,6 +862,10 @@ export async function loadLiveCampaign(liveId: string): Promise<Campaign | null>
     start_time: r.start_time ? String(r.start_time) : null,
     stop_time: r.stop_time ? String(r.stop_time) : null,
     data_source: r.data_source ? String(r.data_source) : null,
+      flight_budget: r.flight_budget != null ? num(r.flight_budget) : null,
+      flight_days_total: r.flight_days_total != null ? num(r.flight_days_total) : null,
+      flight_days_elapsed: r.flight_days_elapsed != null ? num(r.flight_days_elapsed) : null,
+      flight_status_reported: r.flight_status_reported ? String(r.flight_status_reported) : null,
     metrics: normalizeMetrics(r.metrics),
     account_currency: await accountCurrency(),
   });

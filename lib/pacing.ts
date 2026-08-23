@@ -93,6 +93,64 @@ export function computePacing(input: PacingInput): Pacing {
   return UNKNOWN(spend, daysElapsed, "No budget set on this object");
 }
 
+/* ═════════════════ flight-to-date pacing (uploaded trackers) ═════════════════ */
+
+export interface FlightPacing extends Pacing {
+  /** Verdict printed in the source sheet, normalised. null when it had none. */
+  reported: "under" | "on-track" | "over" | null;
+  /** True when the sheet's verdict and the recomputed one disagree. */
+  disagrees: boolean;
+}
+
+/** "over Pacing", "underpacing", "Even" → the states this app speaks. */
+export function normalizeReportedStatus(raw: string | null | undefined): FlightPacing["reported"] {
+  const t = String(raw ?? "").toLowerCase().replace(/[^a-z]/g, "");
+  if (!t) return null;
+  if (t.includes("over")) return "over";
+  if (t.includes("under")) return "under";
+  if (t.includes("even") || t.includes("ontrack") || t.includes("ontarget")) return "on-track";
+  return null;
+}
+
+/**
+ * Pacing for a campaign whose spend is CUMULATIVE against a flight budget.
+ *
+ * A pacing tracker states its own position in the flight, so this is the
+ * lifetime calculation with the sheet's own elapsed/total rather than dates
+ * inferred from daily rows. Passing cumulative spend through the window path
+ * instead compares a month of spend to one day of budget and reads ~2000% over.
+ *
+ * The sheet's own verdict is carried alongside but never substituted for the
+ * computed one: a tracker with a stale or broken formula should be caught here,
+ * not inherited.
+ */
+export function flightPacing(input: {
+  spend: number;
+  budget: number;
+  daysTotal: number | null;
+  daysElapsed: number | null;
+  reportedStatus?: string | null;
+}): FlightPacing {
+  const reported = normalizeReportedStatus(input.reportedStatus);
+  const total = input.daysTotal ?? 0;
+  const elapsed = input.daysElapsed ?? 0;
+
+  if (!(input.budget > 0) || !(total > 0) || !(elapsed > 0)) {
+    return {
+      ...UNKNOWN(input.spend, elapsed, "The tracker did not report a budget and a position in the flight"),
+      reported, disagrees: false,
+    };
+  }
+
+  const base = computePacing({
+    spend: input.spend,
+    lifetimeBudget: input.budget,
+    daysElapsed: elapsed,
+    totalDays: total,
+  });
+  return { ...base, reported, disagrees: reported !== null && reported !== base.state };
+}
+
 /** Whole days between two ISO timestamps, inclusive of the start day. */
 export function daysBetween(fromISO?: string | null, toISO?: string | null): number {
   if (!fromISO || !toISO) return 0;

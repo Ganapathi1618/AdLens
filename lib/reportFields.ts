@@ -16,7 +16,15 @@ export type Field =
   | "frequency" | "ctr" | "cpc" | "cpm" | "conversions" | "conv_value" | "roas"
   | "objective" | "status" | "currency" | "ad_format"
   | "campaign_budget" | "campaign_budget_type" | "adset_budget" | "adset_budget_type"
-  | "starts" | "ends" | "report_start" | "report_end";
+  | "starts" | "ends" | "report_start" | "report_end"
+  // ── Pacing-tracker columns ────────────────────────────────────────
+  // Agencies pace flights in a purpose-built sheet rather than in Ads
+  // Manager, and those sheets carry the answer the client actually asks for:
+  // is this campaign on budget, and what should it spend tomorrow. Reading
+  // them means the analysis can speak to pacing instead of ignoring it.
+  | "budget" | "days_total" | "days_elapsed" | "days_left"
+  | "expected_delivered_pct" | "actual_delivered_pct" | "budget_left"
+  | "required_daily" | "yesterday_spend" | "pacing_ratio" | "pacing_status";
 
 export interface FieldSpec {
   key: Field;
@@ -58,6 +66,19 @@ export const FIELD_SPECS: FieldSpec[] = [
   { key: "ends", label: "Flight end", kind: "date", help: "Needed to pace a lifetime budget." },
   { key: "report_start", label: "Reporting starts", kind: "date", help: "Used as the day column when there is no explicit one." },
   { key: "report_end", label: "Reporting ends", kind: "date", help: "Report window end." },
+
+  // ── Pacing tracker ───────────────────────────────────────────────
+  { key: "budget", label: "Budget", kind: "number", help: "Flight budget for the period. Enables pacing on a tracker that has no Ads Manager budget column." },
+  { key: "days_total", label: "Total days", kind: "number", help: "Length of the flight. With days elapsed, gives expected delivery." },
+  { key: "days_elapsed", label: "Days elapsed", kind: "number", help: "How far into the flight this row is. Pacing is meaningless without it." },
+  { key: "days_left", label: "Days left", kind: "number", help: "Used to compute the daily spend needed to land on budget." },
+  { key: "expected_delivered_pct", label: "Expected delivered %", kind: "number", help: "Share of budget that should be spent by now. Recomputed and cross-checked." },
+  { key: "actual_delivered_pct", label: "Actual delivered %", kind: "number", help: "Share of budget actually spent. Recomputed and cross-checked." },
+  { key: "budget_left", label: "Budget left", kind: "number", help: "Unspent budget remaining in the flight." },
+  { key: "required_daily", label: "Required daily spend", kind: "number", help: "What it must spend per remaining day to land on budget." },
+  { key: "yesterday_spend", label: "Yesterday spent", kind: "number", help: "Most recent day's spend, for the near-term pacing read." },
+  { key: "pacing_ratio", label: "Overall pacing", kind: "number", help: "Actual delivery over expected. 1.0 is on plan." },
+  { key: "pacing_status", label: "Pacing status", kind: "text", help: "The sheet's own verdict. AdLens recomputes it and reports any disagreement rather than inheriting it." },
 ];
 
 export const FIELD_BY_KEY: Record<Field, FieldSpec> =
@@ -81,6 +102,10 @@ export interface Capability {
 export interface ReportAnalysis {
   headers: string[];
   mapping: Mapping;
+  /** Columns summed into one field, used only where no single total column
+   *  exists — a tracker splitting revenue across "Tickets Purchase Value" and
+   *  "Birthday Purchase Value" has no combined column to map. */
+  additive: Partial<Record<Field, number[]>>;
   unmapped: string[];
   sheet: string | null;
   sheets: SheetChoice[];

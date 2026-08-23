@@ -29,6 +29,7 @@ export default function UploadPage() {
   const [file, setFile] = useState<File | null>(null);
   const [analysis, setAnalysis] = useState<ReportAnalysis | null>(null);
   const [overrides, setOverrides] = useState<Mapping>({});
+  const [sheet, setSheet] = useState<string | null>(null);
   const [busy, setBusy] = useState<null | "preview" | "commit">(null);
   const [error, setError] = useState<string | null>(null);
   const [committed, setCommitted] = useState<UploadBatch | null>(null);
@@ -60,7 +61,7 @@ export default function UploadPage() {
     () => ({ ...(analysis?.mapping ?? {}), ...overrides }),
     [analysis, overrides]);
 
-  async function preview(f: File, mapping?: Mapping) {
+  async function preview(f: File, mapping?: Mapping, sheetName?: string | null) {
     setBusy("preview");
     setError(null);
     setCommitted(null);
@@ -68,6 +69,7 @@ export default function UploadPage() {
       const body = new FormData();
       body.append("file", f);
       if (mapping) body.append("mapping", JSON.stringify(mapping));
+      if (sheetName) body.append("sheet", sheetName);
       const res = await fetch("/api/upload?mode=preview", { method: "POST", body });
       const d = await res.json();
       if (d.analysis) setAnalysis(d.analysis);
@@ -87,7 +89,23 @@ export default function UploadPage() {
     setFile(f);
     setOverrides({});
     setAnalysis(null);
+    setSheet(null);
     void preview(f);
+  }
+
+  /**
+   * Read a different sheet of the same workbook.
+   *
+   * The default is the sheet with the most rows, which is right for an export
+   * that ships a cover sheet — and wrong for a workbook whose raw dump dwarfs
+   * the summary the user actually wants analysed. Column overrides are dropped
+   * because they index into the previous sheet's columns.
+   */
+  function pickSheet(name: string) {
+    if (!file || name === (analysis?.sheet ?? "")) return;
+    setSheet(name);
+    setOverrides({});
+    void preview(file, undefined, name);
   }
 
   // Re-previewing on every change keeps the tier, the capability list and the
@@ -108,6 +126,7 @@ export default function UploadPage() {
       body.append("mapping", JSON.stringify(effectiveMapping));
       body.append("label", label);
       body.append("timezone", timezone);
+      if (sheet) body.append("sheet", sheet);
       if (appendTo) {
         body.append("account", appendTo);
         body.append("commitMode", "append");
@@ -252,6 +271,34 @@ export default function UploadPage() {
       {/* ── step 2: the preview ──────────────────────────────────── */}
       {analysis && !committed && (
         <motion.div initial={{ opacity: 0, y: 12 }} animate={{ opacity: 1, y: 0 }}>
+          {/* Which sheet — a workbook often keeps the summary a human reads on
+              a small sheet and a raw dump on a huge one, and the default picks
+              the larger. Offer the choice rather than deciding silently. */}
+          {analysis.sheets.length > 1 && (
+            <div className="card p-4 mb-4">
+              <div className="section-label mb-2">Sheet to analyse</div>
+              <div className="flex gap-2 flex-wrap">
+                {analysis.sheets.map((sh) => {
+                  const active = sh.name === analysis.sheet;
+                  return (
+                    <button key={sh.name} onClick={() => pickSheet(sh.name)} disabled={busy !== null}
+                      className={clsx("text-left px-3 py-2 rounded-xl border transition-colors disabled:opacity-50",
+                        active ? "border-accent/50 ring-1 ring-accent/30" : "border-line2 hover:bg-raised")}
+                      style={active ? { background: "var(--accent-soft)" } : undefined}>
+                      <div className="text-[13px] font-bold">{sh.name}</div>
+                      <div className="text-[11px] text-mut font-medium num">
+                        {sh.rows.toLocaleString()} rows · {sh.columns} cols
+                      </div>
+                    </button>
+                  );
+                })}
+              </div>
+              <div className="text-[11.5px] text-mut font-medium mt-2.5">
+                Defaults to the largest sheet. Switching re-reads the file and clears any column overrides.
+              </div>
+            </div>
+          )}
+
           {/* tier */}
           <div className={clsx("card p-5 mb-4 border", TIER_TONE[analysis.tier])}>
             <div className="flex items-baseline gap-2.5 flex-wrap mb-1">

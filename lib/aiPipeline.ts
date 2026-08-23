@@ -242,14 +242,13 @@ export async function buildContext(
   }
   if (!evidence) return null;
 
-  // Pacing and status are part of the answerable surface, so they travel with
-  // the evidence rather than being re-derived in prose.
+  // Status is part of the answerable surface, so it travels with the evidence
+  // rather than being re-derived in prose. Pacing is NOT set here: buildEvidence
+  // already computes the full block, including the required daily spend and any
+  // disagreement with an uploaded tracker's own verdict, and overwriting it with
+  // the bare pacingDetail would throw that away.
   const c = retrieval.campaign;
-  if (c) {
-    (evidence as Evidence & { pacing?: unknown; status?: string }).pacing =
-      c.pacingDetail ?? { percent: c.pacing, basis: "unknown" };
-    (evidence as Evidence & { status?: string }).status = c.status;
-  }
+  if (c) (evidence as Evidence & { status?: string }).status = c.status;
   if (retrieval.adsets?.length) {
     (evidence as Evidence & { adsetPacing?: unknown }).adsetPacing = retrieval.adsets.map((a) => ({
       name: a.name,
