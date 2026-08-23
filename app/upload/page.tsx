@@ -37,6 +37,10 @@ export default function UploadPage() {
   const [batches, setBatches] = useState<UploadBatch[]>([]);
   const [label, setLabel] = useState("");
   const [dragging, setDragging] = useState(false);
+  // Which existing report this file joins, if any. Appending is what lets one
+  // report hold several months, which is what a month-over-month comparison
+  // needs — replacing would discard the month already there.
+  const [appendTo, setAppendTo] = useState<string>("");
   const [deleting, setDeleting] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
   // Committing or deleting changes whether this deployment holds real data,
@@ -108,6 +112,10 @@ export default function UploadPage() {
       body.append("mapping", JSON.stringify(effectiveMapping));
       body.append("label", label);
       body.append("timezone", timezone);
+      if (appendTo) {
+        body.append("account", appendTo);
+        body.append("commitMode", "append");
+      }
       const res = await fetch("/api/upload?mode=commit", { method: "POST", body });
       const d = await res.json();
       if (!res.ok || !d.ok) throw new Error(d.error ?? "Could not save that upload.");
@@ -142,7 +150,7 @@ export default function UploadPage() {
 
   function reset() {
     setFile(null); setAnalysis(null); setOverrides({}); setCommitted(null);
-    setCampaigns([]); setError(null); setLabel("");
+    setCampaigns([]); setError(null); setLabel(""); setAppendTo("");
     if (inputRef.current) inputRef.current.value = "";
   }
 
@@ -231,10 +239,18 @@ export default function UploadPage() {
                 </div>
               </>
             )}
-            <div className="flex gap-2.5">
-              <Link href="/check" className="btn-primary">Open the account check</Link>
-              <button onClick={reset} className="btn-ghost">Upload another</button>
+            <div className="flex gap-2.5 flex-wrap">
+              {committed.sources.length > 1
+                ? <Link href="/monthly" className="btn-primary">Compare months →</Link>
+                : <Link href="/check" className="btn-primary">Open the account check</Link>}
+              <button onClick={reset} className="btn-ghost">Add another month</button>
             </div>
+            {committed.sources.length === 1 && (
+              <div className="text-[11.5px] text-mut font-medium mt-2.5">
+                Add an export for another month to this report and you can run a month-over-month
+                comparison on it.
+              </div>
+            )}
           </motion.div>
         )}
       </AnimatePresence>
@@ -343,10 +359,35 @@ export default function UploadPage() {
             </div>
           )}
 
+          {/* where it goes */}
+          {batches.length > 0 && (
+            <div className="card p-4 mb-4">
+              <div className="section-label mb-2">Where should this go?</div>
+              <select value={appendTo} onChange={(e) => setAppendTo(e.target.value)}
+                className="w-full text-[13px] font-semibold px-3 py-2.5 rounded-xl border border-line2 bg-surface outline-none focus:border-accent">
+                <option value="">Create a new report</option>
+                {batches.map((b) => (
+                  <option key={b.id} value={b.id}>
+                    Add to “{b.label}” ({b.dateStart} → {b.dateEnd})
+                  </option>
+                ))}
+              </select>
+              <div className="text-[11.5px] text-mut font-medium mt-1.5 leading-relaxed">
+                {appendTo
+                  ? <>This file is <strong className="text-ink">merged</strong> into that report. Days it
+                    already has are updated; new months are added — which is what a month-over-month
+                    comparison needs.</>
+                  : <>A new report holds only this file. To compare months, add later exports to the same
+                    report instead of creating one per month.</>}
+              </div>
+            </div>
+          )}
+
           {/* commit */}
           <div className="card p-4 mb-4">
             <div className="section-label mb-2">Name this report</div>
             <input value={label} onChange={(e) => setLabel(e.target.value)} maxLength={80}
+              disabled={Boolean(appendTo)}
               placeholder="e.g. Urban Air — August pacing"
               className="w-full text-[13px] font-semibold px-3 py-2.5 rounded-xl border border-line2 bg-surface outline-none focus:border-accent focus:ring-2 focus:ring-accent/20" />
             <div className="text-[11.5px] text-mut font-medium mt-1.5">
@@ -357,7 +398,10 @@ export default function UploadPage() {
           <div className="flex items-center justify-between gap-3 mb-8">
             <button onClick={reset} className="btn-ghost">Cancel</button>
             <button onClick={commit} disabled={blocked || busy !== null} className="btn-primary">
-              {busy === "commit" ? "Saving…" : blocked ? "Fix the errors above" : `Commit ${analysis.counts.campaigns} campaigns`}
+              {busy === "commit" ? "Saving…"
+                : blocked ? "Fix the errors above"
+                  : appendTo ? `Add ${analysis.counts.campaigns} campaigns to that report`
+                    : `Commit ${analysis.counts.campaigns} campaigns`}
             </button>
           </div>
         </motion.div>
@@ -379,7 +423,7 @@ export default function UploadPage() {
                     </span>
                   </div>
                   <div className="text-[11px] text-mut font-medium truncate">
-                    {b.filename} · {b.campaigns} campaigns · {b.distinctDays}d
+                    {b.sources.length > 1 ? `${b.sources.length} files` : b.filename} · {b.campaigns} campaigns · {b.distinctDays}d
                     {b.dateStart ? ` (${b.dateStart} → ${b.dateEnd})` : ""} · {b.currency} ·
                     {" "}uploaded {new Date(b.uploadedAt).toLocaleString()}
                   </div>

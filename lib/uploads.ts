@@ -43,6 +43,16 @@ export function newUploadAccountId(): string {
   return `${UPLOAD_ACCOUNT_PREFIX}${hex}`;
 }
 
+/** One file that fed a batch. A batch built from monthly exports has several. */
+export interface UploadSource {
+  filename: string;
+  sheet: string | null;
+  dateStart: string | null;
+  dateEnd: string | null;
+  rows: number;
+  uploadedAt: string;
+}
+
 export interface UploadBatch {
   id: string;
   label: string;
@@ -65,6 +75,8 @@ export interface UploadBatch {
   warnings: string[];
   mapping: Mapping;
   unmapped: string[];
+  /** Every file merged into this batch, oldest first. */
+  sources: UploadSource[];
   uploadedAt: string;
 }
 
@@ -166,7 +178,11 @@ export function ensureUploadSchema(): Promise<void> {
         warnings JSONB DEFAULT '[]'::jsonb,
         mapping JSONB DEFAULT '{}'::jsonb,
         unmapped JSONB DEFAULT '[]'::jsonb,
+        sources JSONB DEFAULT '[]'::jsonb,
         uploaded_at TIMESTAMPTZ NOT NULL DEFAULT now())`;
+      // A batch can be fed by several monthly exports; `sources` keeps the
+      // provenance of each so a report can name the files behind it.
+      await sql`ALTER TABLE upload_batches ADD COLUMN IF NOT EXISTS sources JSONB DEFAULT '[]'::jsonb`;
     })().catch((e) => {
       ready = null; // retry next request rather than caching the failure
       throw e;
@@ -190,8 +206,17 @@ function chunks<T>(arr: T[], size = CHUNK): T[][] {
 
 const ts = (d: string | null) => (d ? `${d}T00:00:00Z` : null);
 
+export type CommitMode = "replace" | "append";
+
 export interface CommitInput {
   account: string;
+  /**
+   * "replace" rewrites the batch from this file alone (the default).
+   * "append" merges this file into an existing batch, which is what makes a
+   * month-over-month report possible: one batch accumulates several monthly
+   * exports instead of each upload discarding the last.
+   */
+  mode?: CommitMode;
   label: string;
   filename: string;
   sheet: string | null;
@@ -209,6 +234,47 @@ export interface CommitInput {
 }
 
 /**
+ * The batch as the database actually holds it.
+ *
+ * After an append, the newest file's own counts describe only part of the
+ * batch. Reading them back means the recorded totals cannot drift from the
+ * rows, whichever mode was used.
+ */
+async function recomputeStats(account: string): Promise<{
+  campaigns: number; adsets: number; ads: number; dayRows: number;
+  dateStart: string | null; dateEnd: string | null; distinctDays: number;
+}> {
+  const sql = getSql();
+  const rows = (await sql`
+    SELECT
+      (SELECT count(*)::int FROM meta_campaigns WHERE ad_account_id = ${account}) AS campaigns,
+      (SELECT count(*)::int FROM meta_adsets s
+         JOIN meta_campaigns c ON c.id = s.campaign_id WHERE c.ad_account_id = ${account}) AS adsets,
+      (SELECT count(*)::int FROM meta_ads a
+         JOIN meta_adsets s ON s.id = a.adset_id
+         JOIN meta_campaigns c ON c.id = s.campaign_id WHERE c.ad_account_id = ${account}) AS ads,
+      (SELECT count(*)::int FROM meta_daily_metrics m
+         JOIN meta_campaigns c ON c.id = m.campaign_id WHERE c.ad_account_id = ${account}) AS day_rows,
+      (SELECT to_char(min(m.date), 'YYYY-MM-DD') FROM meta_daily_metrics m
+         JOIN meta_campaigns c ON c.id = m.campaign_id WHERE c.ad_account_id = ${account}) AS date_start,
+      (SELECT to_char(max(m.date), 'YYYY-MM-DD') FROM meta_daily_metrics m
+         JOIN meta_campaigns c ON c.id = m.campaign_id WHERE c.ad_account_id = ${account}) AS date_end,
+      (SELECT count(DISTINCT m.date)::int FROM meta_daily_metrics m
+         JOIN meta_campaigns c ON c.id = m.campaign_id WHERE c.ad_account_id = ${account}) AS distinct_days
+  `) as unknown as Record<string, unknown>[];
+  const r = rows[0] ?? {};
+  return {
+    campaigns: Number(r.campaigns ?? 0),
+    adsets: Number(r.adsets ?? 0),
+    ads: Number(r.ads ?? 0),
+    dayRows: Number(r.day_rows ?? 0),
+    dateStart: r.date_start ? String(r.date_start) : null,
+    dateEnd: r.date_end ? String(r.date_end) : null,
+    distinctDays: Number(r.distinct_days ?? 0),
+  };
+}
+
+/**
  * Write one parsed report into the meta_* tables under its own account id.
  *
  * Re-committing the same account replaces its contents: entity ids are derived
@@ -220,9 +286,16 @@ export async function commitUpload(input: CommitInput): Promise<UploadBatch> {
   const sql = getSql();
   const { account, data } = input;
 
-  // Replace, don't merge: leftovers from a previous version of the same batch
-  // would silently widen every total. Cascades clear adsets/ads/day rows.
-  await sql`DELETE FROM meta_campaigns WHERE ad_account_id = ${account}`;
+  const mode: CommitMode = input.mode ?? "replace";
+
+  // Replacing drops everything first: leftovers from a previous version of the
+  // same batch would silently widen every total. Cascades clear adsets, ads and
+  // day rows. Appending keeps them — entity ids are deterministic per batch, so
+  // a campaign present in both files updates in place and only its new dates
+  // are added.
+  if (mode === "replace") {
+    await sql`DELETE FROM meta_campaigns WHERE ad_account_id = ${account}`;
+  }
 
   for (const part of chunks(data.campaigns)) {
     await sql`
@@ -241,7 +314,13 @@ export async function commitUpload(input: CommitInput): Promise<UploadBatch> {
         ${part.map((c) => ts(c.stopTime))}::timestamptz[],
         ${part.map(() => account)}::text[],
         ${part.map(() => "upload")}::text[],
-        ${part.map(() => new Date().toISOString())}::timestamptz[])`;
+        ${part.map(() => new Date().toISOString())}::timestamptz[])
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name, status = EXCLUDED.status,
+        effective_status = EXCLUDED.effective_status, objective = EXCLUDED.objective,
+        daily_budget = EXCLUDED.daily_budget, lifetime_budget = EXCLUDED.lifetime_budget,
+        start_time = EXCLUDED.start_time, stop_time = EXCLUDED.stop_time,
+        updated_at = EXCLUDED.updated_at`;
   }
 
   const campaignDays = data.campaigns.flatMap((c) => c.days.map((d) => ({ parent: c.id, d })));
@@ -291,7 +370,13 @@ export async function commitUpload(input: CommitInput): Promise<UploadBatch> {
         ${part.map((r) => ts(r.s.stopTime))}::timestamptz[],
         ${part.map((r) => r.s.optimizationGoal)}::text[],
         ${part.map((r) => r.s.destinationType)}::text[],
-        ${part.map(() => new Date().toISOString())}::timestamptz[])`;
+        ${part.map(() => new Date().toISOString())}::timestamptz[])
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name, status = EXCLUDED.status,
+        effective_status = EXCLUDED.effective_status,
+        daily_budget = EXCLUDED.daily_budget, lifetime_budget = EXCLUDED.lifetime_budget,
+        start_time = EXCLUDED.start_time, stop_time = EXCLUDED.stop_time,
+        updated_at = EXCLUDED.updated_at`;
   }
 
   const setDays = data.campaigns.flatMap((c) => c.adsets.flatMap((s) => s.days.map((d) => ({ parent: s.id, d }))));
@@ -330,7 +415,9 @@ export async function commitUpload(input: CommitInput): Promise<UploadBatch> {
         ${part.map((r) => r.a.name)}::text[],
         ${part.map((r) => r.a.format)}::text[],
         ${part.map(() => "ACTIVE")}::text[],
-        ${part.map(() => new Date().toISOString())}::timestamptz[])`;
+        ${part.map(() => new Date().toISOString())}::timestamptz[])
+      ON CONFLICT (id) DO UPDATE SET
+        name = EXCLUDED.name, format = EXCLUDED.format, updated_at = EXCLUDED.updated_at`;
   }
 
   const adDays = data.campaigns.flatMap((c) =>
@@ -357,17 +444,52 @@ export async function commitUpload(input: CommitInput): Promise<UploadBatch> {
         frequency = EXCLUDED.frequency, actions = EXCLUDED.actions`;
   }
 
+  const previous = mode === "append" ? await getBatch(account) : null;
+
+  const source: UploadSource = {
+    filename: input.filename,
+    sheet: input.sheet,
+    dateStart: data.dateStart,
+    dateEnd: data.dateEnd,
+    rows: input.rowsParsed,
+    uploadedAt: new Date().toISOString(),
+  };
+  const sources = [...(previous?.sources ?? []), source];
+
+  // A capability holds for the batch only if EVERY file supports it. If August
+  // carried frequency and September did not, the batch cannot claim frequency —
+  // overstating it is exactly the failure mode this codebase avoids elsewhere.
+  const capabilities = previous
+    ? input.capabilities.map((c) => {
+        const before = previous.capabilities.find((p) => p.key === c.key);
+        if (!before || before.available === c.available) return c;
+        return c.available
+          ? { ...c, available: false, reason: `Not in every uploaded file — ${before.reason}` }
+          : c;
+      })
+    : input.capabilities;
+
+  const warnings = previous
+    ? Array.from(new Set([...previous.warnings, ...input.warnings]))
+    : input.warnings;
+
+  // Counts come back from the database rather than from this file, so an
+  // append reports the batch as it now stands instead of only its newest part.
+  const stats = await recomputeStats(account);
+
   await sql`
     INSERT INTO upload_batches
       (id, label, filename, sheet, currency, timezone, level, granularity, tier,
        date_start, date_end, distinct_days, rows_parsed, campaigns, adsets, ads, day_rows,
-       capabilities, warnings, mapping, unmapped, uploaded_at)
+       capabilities, warnings, mapping, unmapped, sources, uploaded_at)
     VALUES (${account}, ${input.label}, ${input.filename}, ${input.sheet},
             ${data.currency}, ${input.timezone}, ${input.level}, ${input.granularity}, ${input.tier},
-            ${data.dateStart}, ${data.dateEnd}, ${input.distinctDays}, ${input.rowsParsed},
-            ${data.counts.campaigns}, ${data.counts.adsets}, ${data.counts.ads}, ${data.counts.dayRows},
-            ${JSON.stringify(input.capabilities)}::jsonb, ${JSON.stringify(input.warnings)}::jsonb,
-            ${JSON.stringify(input.mapping)}::jsonb, ${JSON.stringify(input.unmapped)}::jsonb, now())
+            ${stats.dateStart}, ${stats.dateEnd}, ${stats.distinctDays},
+            ${(previous?.rowsParsed ?? 0) + input.rowsParsed},
+            ${stats.campaigns}, ${stats.adsets}, ${stats.ads}, ${stats.dayRows},
+            ${JSON.stringify(capabilities)}::jsonb, ${JSON.stringify(warnings)}::jsonb,
+            ${JSON.stringify(input.mapping)}::jsonb, ${JSON.stringify(input.unmapped)}::jsonb,
+            ${JSON.stringify(sources)}::jsonb, now())
     ON CONFLICT (id) DO UPDATE SET
       label = EXCLUDED.label, filename = EXCLUDED.filename, sheet = EXCLUDED.sheet,
       currency = EXCLUDED.currency, timezone = EXCLUDED.timezone, level = EXCLUDED.level,
@@ -377,7 +499,7 @@ export async function commitUpload(input: CommitInput): Promise<UploadBatch> {
       campaigns = EXCLUDED.campaigns, adsets = EXCLUDED.adsets, ads = EXCLUDED.ads,
       day_rows = EXCLUDED.day_rows, capabilities = EXCLUDED.capabilities,
       warnings = EXCLUDED.warnings, mapping = EXCLUDED.mapping, unmapped = EXCLUDED.unmapped,
-      uploaded_at = now()`;
+      sources = EXCLUDED.sources, uploaded_at = now()`;
 
   const batch = await getBatch(account);
   if (!batch) throw new Error("Upload was written but could not be read back.");
@@ -425,6 +547,7 @@ function toBatch(r: Record<string, unknown>): UploadBatch {
     warnings: asArray<string>(r.warnings, []),
     mapping: asObject<Mapping>(r.mapping, {}),
     unmapped: asArray<string>(r.unmapped, []),
+    sources: asArray<UploadSource>(r.sources, []),
     uploadedAt: r.uploaded_at ? new Date(String(r.uploaded_at)).toISOString() : new Date().toISOString(),
   };
 }

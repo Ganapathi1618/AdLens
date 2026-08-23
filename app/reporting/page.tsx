@@ -1,8 +1,9 @@
 "use client";
 import { useEffect, useMemo, useState } from "react";
 import { useRouter } from "next/navigation";
+import Link from "next/link";
 import { motion } from "framer-motion";
-import { Search, FileText } from "lucide-react";
+import { Search, FileText, Upload } from "lucide-react";
 import { campaigns } from "@/lib/data";
 import { PlatBadge, StatusBadge } from "@/components/Badge";
 import PageHeader from "@/components/PageHeader";
@@ -70,7 +71,7 @@ export default function Reporting() {
         sub="Reports cover one campaign at a time. Pick the account, then the campaign, then generate." />
 
       <Step n={1} label="Select ad account" />
-      <div className="card overflow-hidden divide-y divide-line mb-3">
+      <div className="card overflow-hidden divide-y divide-line mb-2">
         {allAccounts.map((a) => (
           <button key={a.id} onClick={() => {
             setAcct(a.id);
@@ -89,6 +90,17 @@ export default function Reporting() {
           </button>
         ))}
       </div>
+      <div className="flex items-center justify-between gap-3 flex-wrap mb-3 px-1">
+        <span className="text-[11.5px] text-mut font-medium">
+          {uploadRows.length === 0
+            ? "No account access, or reporting on an export? Upload one and it appears here as an account."
+            : `${uploadRows.length} uploaded report${uploadRows.length === 1 ? "" : "s"} listed above.`}
+        </span>
+        <Link href="/upload" className="text-[11.5px] font-bold text-accent hover:underline inline-flex items-center gap-1.5 shrink-0">
+          <Upload size={13} /> Upload a report
+        </Link>
+      </div>
+
       <motion.div key={acct} initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
         className="card p-4 mb-5 flex gap-7 flex-wrap text-[13px]">
         {[["Account", account.name], ["Platform", account.plat === "meta" ? "Meta" : "LinkedIn"], ["Monthly spend", account.spend], ["Active campaigns", String(account.camps)]].map(([l, v]) => (
