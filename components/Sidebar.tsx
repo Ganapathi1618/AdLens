@@ -2,7 +2,7 @@
 import Link from "next/link";
 import { usePathname } from "next/navigation";
 import { motion } from "framer-motion";
-import { Home, LayoutGrid, FileText, BookOpen, Bell, Search, Zap, Upload, CalendarRange } from "lucide-react";
+import { Home, LayoutGrid, FileText, BookOpen, Bell, Search, Zap, Upload, LogOut, CalendarRange } from "lucide-react";
 import ThemeToggle from "./ThemeToggle";
 import clsx from "clsx";
 
@@ -29,6 +29,11 @@ const groups: { label: string; items: { href: string; label: string; icon: typeo
 
 export default function Sidebar() {
   const path = usePathname();
+
+  async function signOut() {
+    await fetch("/api/auth/logout", { method: "POST" }).catch(() => {});
+    window.location.href = "/login";
+  }
 
   return (
     <aside className="w-[232px] shrink-0 glass border-r border-line flex flex-col">
@@ -69,7 +74,11 @@ export default function Sidebar() {
 
       </nav>
 
-      <div className="p-3 border-t border-line flex items-center justify-end">
+      <div className="p-3 border-t border-line flex items-center justify-end gap-1.5">
+        <button onClick={signOut} title="Sign out"
+          className="w-[26px] h-[26px] grid place-items-center rounded-lg border border-line2 text-mut hover:text-ink hover:bg-raised transition-colors">
+          <LogOut size={13} />
+        </button>
         <ThemeToggle />
       </div>
     </aside>
