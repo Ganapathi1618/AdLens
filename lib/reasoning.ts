@@ -33,6 +33,30 @@ export interface Evidence {
   /** Full period-over-period breakdowns, with ratios recomputed from totals
    *  (not averaged) and marked non-comparable when history is too short. */
   periods: { wow: PeriodComparison; mom: PeriodComparison };
+  /**
+   * Budget pacing, when the source carried a budget at all.
+   *
+   * `reportedStatus` is the verdict printed in an uploaded pacing tracker.
+   * It travels alongside the computed one and is never substituted for it —
+   * where they disagree the narrative must say so rather than pick a side.
+   */
+  pacing: {
+    state: "under" | "on-track" | "over" | "unknown";
+    percent: number | null;
+    basis: string;
+    budget: number | null;
+    expected: number | null;
+    spend: number;
+    daysElapsed: number;
+    totalDays: number | null;
+    /** Spend per remaining day needed to finish exactly on budget. */
+    requiredDaily: number | null;
+    /** Over- or under-spend against expectation so far, in account currency. */
+    gap: number | null;
+    reportedStatus: string | null;
+    disagreesWithSource: boolean;
+    reason?: string;
+  } | null;
   /** Reporting context — prevents ROAS-framed verdicts on accounts with no revenue signal. */
   reporting: {
     currency: string;           // ISO code from the ad account (e.g. "INR", "USD")
@@ -46,6 +70,31 @@ export interface Evidence {
 export async function buildEvidence(campaignId: string): Promise<Evidence | null> {
   const c = await dataSource.getCampaign(campaignId);
   if (!c) return null;
+
+  // Pacing is the question a client asks first, and the one this engine could
+  // not answer for an uploaded tracker at all, so it is first-class here.
+  const pd = c.pacingDetail;
+  const pacingBlock: Evidence["pacing"] = pd
+    ? (() => {
+        const remaining = pd.totalDays != null ? Math.max(0, pd.totalDays - pd.daysElapsed) : null;
+        const left = pd.budget != null ? Math.max(0, pd.budget - pd.spend) : null;
+        return {
+          state: pd.state,
+          percent: pd.percent,
+          basis: pd.basis,
+          budget: pd.budget,
+          expected: pd.expected,
+          spend: pd.spend,
+          daysElapsed: pd.daysElapsed,
+          totalDays: pd.totalDays,
+          requiredDaily: remaining && remaining > 0 && left != null ? +(left / remaining).toFixed(2) : null,
+          gap: pd.expected != null ? +(pd.spend - pd.expected).toFixed(2) : null,
+          reportedStatus: (pd as { reported?: string | null }).reported ?? null,
+          disagreesWithSource: Boolean((pd as { disagrees?: boolean }).disagrees),
+          reason: pd.reason,
+        };
+      })()
+    : null;
   const sets = await dataSource.getAdsets(campaignId);
   const series = await dataSource.getDailySeries(campaignId);
 
@@ -321,6 +370,7 @@ export async function buildEvidence(campaignId: string): Promise<Evidence | null
       .map(a => `${a.name} (freq ${a.freq}${a.reachPct > 0 ? `, reach ${a.reachPct}%` : ", reach not reported"})`),
     weekOverWeek: wow,
     periods: { wow: wowCompare(series), mom: monthOverMonth(series) },
+    pacing: pacingBlock,
     reporting: { currency, revenueTracked, conversionBasis: revenueTracked ? "purchases" : "platform-reported actions (no purchase value)", caveats },
   };
 }

@@ -140,6 +140,12 @@ export function ensureUploadSchema(): Promise<void> {
       await sql`ALTER TABLE meta_campaigns ADD COLUMN IF NOT EXISTS start_time TIMESTAMPTZ`;
       await sql`ALTER TABLE meta_campaigns ADD COLUMN IF NOT EXISTS stop_time TIMESTAMPTZ`;
       await sql`ALTER TABLE meta_campaigns ADD COLUMN IF NOT EXISTS data_source TEXT DEFAULT 'graph'`;
+      // Flight-to-date pacing from an uploaded pacing tracker. Null on every
+      // Graph-synced row, which keeps being paced from its daily metrics.
+      await sql`ALTER TABLE meta_campaigns ADD COLUMN IF NOT EXISTS flight_budget NUMERIC`;
+      await sql`ALTER TABLE meta_campaigns ADD COLUMN IF NOT EXISTS flight_days_total NUMERIC`;
+      await sql`ALTER TABLE meta_campaigns ADD COLUMN IF NOT EXISTS flight_days_elapsed NUMERIC`;
+      await sql`ALTER TABLE meta_campaigns ADD COLUMN IF NOT EXISTS flight_status_reported TEXT`;
       await sql`ALTER TABLE meta_daily_metrics ADD COLUMN IF NOT EXISTS cpm NUMERIC DEFAULT 0`;
       await sql`ALTER TABLE meta_daily_metrics ADD COLUMN IF NOT EXISTS reach BIGINT DEFAULT 0`;
       await sql`ALTER TABLE meta_daily_metrics ADD COLUMN IF NOT EXISTS frequency NUMERIC DEFAULT 0`;
@@ -301,7 +307,8 @@ export async function commitUpload(input: CommitInput): Promise<UploadBatch> {
     await sql`
       INSERT INTO meta_campaigns
         (id, name, status, effective_status, objective, daily_budget, lifetime_budget,
-         start_time, stop_time, ad_account_id, data_source, updated_at)
+         start_time, stop_time, ad_account_id, data_source, updated_at,
+         flight_budget, flight_days_total, flight_days_elapsed, flight_status_reported)
       SELECT * FROM UNNEST(
         ${part.map((c) => c.id)}::text[],
         ${part.map((c) => c.name)}::text[],
@@ -314,13 +321,21 @@ export async function commitUpload(input: CommitInput): Promise<UploadBatch> {
         ${part.map((c) => ts(c.stopTime))}::timestamptz[],
         ${part.map(() => account)}::text[],
         ${part.map(() => "upload")}::text[],
-        ${part.map(() => new Date().toISOString())}::timestamptz[])
+        ${part.map(() => new Date().toISOString())}::timestamptz[],
+        ${part.map((c) => c.flight?.budget ?? null)}::numeric[],
+        ${part.map((c) => c.flight?.daysTotal ?? null)}::numeric[],
+        ${part.map((c) => c.flight?.daysElapsed ?? null)}::numeric[],
+        ${part.map((c) => c.flight?.reportedStatus ?? null)}::text[])
       ON CONFLICT (id) DO UPDATE SET
         name = EXCLUDED.name, status = EXCLUDED.status,
         effective_status = EXCLUDED.effective_status, objective = EXCLUDED.objective,
         daily_budget = EXCLUDED.daily_budget, lifetime_budget = EXCLUDED.lifetime_budget,
         start_time = EXCLUDED.start_time, stop_time = EXCLUDED.stop_time,
-        updated_at = EXCLUDED.updated_at`;
+        updated_at = EXCLUDED.updated_at,
+        flight_budget = EXCLUDED.flight_budget,
+        flight_days_total = EXCLUDED.flight_days_total,
+        flight_days_elapsed = EXCLUDED.flight_days_elapsed,
+        flight_status_reported = EXCLUDED.flight_status_reported`;
   }
 
   const campaignDays = data.campaigns.flatMap((c) => c.days.map((d) => ({ parent: c.id, d })));

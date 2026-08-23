@@ -94,6 +94,30 @@ const ALIASES: [Field, RegExp][] = [
   ["report_end", /^reporting ends$/],
   ["starts", /^(starts|start date|start|flight start)$/],
   ["ends", /^(ends|end date|end|flight end)$/],
+
+  // ── Pacing-tracker vocabulary ──────────────────────────────────────
+  // These sheets are hand-built, so the headers are run together and
+  // punctuated freely: "Actualspent", "ExpectedDelivered%",
+  // "Yesterday'sPacing". normalizeHeader() strips the punctuation but cannot
+  // split the words, so the patterns match the concatenated forms too.
+  //
+  // Ordering matters: the pacing spend column is claimed AFTER the Ads
+  // Manager ones above, so a file carrying both keeps "Amount spent".
+  ["spend", /^actual ?spent$/],
+  ["budget", /^budget$/],
+  ["days_total", /^total days$/],
+  ["days_elapsed", /^days elapsed$/],
+  ["days_left", /^days left$/],
+  ["expected_delivered_pct", /^expected ?delivered/],
+  ["actual_delivered_pct", /^actual ?delivered/],
+  ["budget_left", /^budget ?left$/],
+  ["required_daily", /^required ?daily ?needed$/],
+  ["required_daily", /^required daily/],
+  // "Yesterday'sspent" normalises to "yesterday sspent" — the apostrophe
+  // becomes a space and glues the s onto the next word.
+  ["yesterday_spend", /^yesterday s?spent$/],
+  ["pacing_ratio", /^overall ?pacing$/],
+  ["pacing_status", /^pacing status$/],
 ];
 
 /** Header text reduced to comparable words: "CTR (link click-through rate)" becomes "ctr link click through rate". */
@@ -124,6 +148,44 @@ export function detectMapping(headers: string[]): Mapping {
     }
   }
   return mapping;
+}
+
+/**
+ * Columns that must be SUMMED to produce one field.
+ *
+ * A pacing tracker splits revenue by vertical — "Tickets Purchase Value",
+ * "Birthday Purchase Value" — with no combined column anywhere in the sheet.
+ * Mapping one and ignoring the rest would under-report revenue, which is worse
+ * than reporting none, so the parts are added instead.
+ *
+ * Only consulted when the field has NO single mapped column. A file carrying
+ * both a total and its parts keeps the total, so nothing is ever double-counted.
+ */
+export function detectAdditiveColumns(headers: string[], mapping: Mapping): Partial<Record<Field, number[]>> {
+  const norm = headers.map(normalizeHeader);
+  const used = new Set(Object.values(mapping).filter((v): v is number => typeof v === "number"));
+  const out: Partial<Record<Field, number[]>> = {};
+
+  const collect = (field: Field, pattern: RegExp) => {
+    if (mapping[field] !== undefined) return;
+    const cols: number[] = [];
+    for (let i = 0; i < norm.length; i++) {
+      if (used.has(i) || !norm[i]) continue;
+      if (pattern.test(norm[i])) cols.push(i);
+    }
+    // One part is not a split — it is just a column the aliases did not know,
+    // and treating it as authoritative revenue would be a guess.
+    if (cols.length >= 2) {
+      out[field] = cols;
+      for (const c of cols) used.add(c);
+    }
+  };
+
+  // Value before count: "tickets purchase value" must not be claimed by the
+  // looser purchases pattern.
+  collect("conv_value", /purchase value$/);
+  collect("conversions", /purchases$/);
+  return out;
 }
 
 /** ISO currency code embedded in a header, e.g. "Amount spent (USD)". */
@@ -215,17 +277,35 @@ export function analyzeReport(read: ReadResult, mappingOverride?: Mapping): Repo
     if (v === undefined || v < 0 || v >= headers.length) delete mapping[k];
   }
 
+  const additive = detectAdditiveColumns(headers, mapping);
+
+  /** Numeric read that also sums split columns. All-empty stays null. */
+  const sumAt = (row: string[], f: Field, fmt: NumberFormat): number | null => {
+    const i = mapping[f];
+    if (i !== undefined) return parseNumber(row[i], fmt);
+    const cols = additive[f];
+    if (!cols?.length) return null;
+    let total: number | null = null;
+    for (const c of cols) {
+      const v = parseNumber(row[c], fmt);
+      if (v !== null) total = (total ?? 0) + v;
+    }
+    return total;
+  };
+
   const at = (row: string[], f: Field): string => {
     const i = mapping[f];
     return i === undefined ? "" : String(row[i] ?? "").trim();
   };
   const sampleOf = (f: Field, n = 400): string[] => {
-    const i = mapping[f];
-    if (i === undefined) return [];
+    const cols = mapping[f] !== undefined ? [mapping[f]!] : (additive[f] ?? []);
+    if (!cols.length) return [];
     const out: string[] = [];
     for (let r = 0; r < rows.length && out.length < n; r++) {
-      const v = String(rows[r][i] ?? "").trim();
-      if (v) out.push(v);
+      for (const i of cols) {
+        const v = String(rows[r][i] ?? "").trim();
+        if (v) { out.push(v); break; }
+      }
     }
     return out;
   };
@@ -287,9 +367,9 @@ export function analyzeReport(read: ReadResult, mappingOverride?: Mapping): Repo
     }
 
     spendTotal += spend;
-    const c = parseNumber(at(row, "conversions"), numberFormat);
+    const c = sumAt(row, "conversions", numberFormat);
     if (c !== null) { convTotal += c; convRows++; }
-    let v = parseNumber(at(row, "conv_value"), numberFormat);
+    let v = sumAt(row, "conv_value", numberFormat);
     if (v === null && mapping.roas !== undefined) {
       const r = parseNumber(at(row, "roas"), numberFormat);
       if (r !== null) v = r * spend;
@@ -318,14 +398,21 @@ export function analyzeReport(read: ReadResult, mappingOverride?: Mapping): Repo
       : level === "ad" && fatigueSignal ? "full"
         : "trends";
 
-  const hasBudget = mapping.adset_budget !== undefined || mapping.campaign_budget !== undefined;
+  const hasBudget = mapping.adset_budget !== undefined || mapping.campaign_budget !== undefined
+    || mapping.budget !== undefined;
   // A lifetime budget can only be paced against a window if we know how long
   // the flight is; without that the share of budget owed to the window is
   // underivable and pacing is reported as unknown instead of guessed.
   const budgetTypes = [...sampleOf("adset_budget_type", 50), ...sampleOf("campaign_budget_type", 50)];
   const hasLifetime = budgetTypes.some((t) => /life/i.test(t));
   const hasDailyBudget = hasBudget && budgetTypes.length > 0 && budgetTypes.some((t) => !/life/i.test(t));
-  const hasFlight = mapping.starts !== undefined && mapping.ends !== undefined;
+  const hasFlight = (mapping.starts !== undefined && mapping.ends !== undefined)
+    || (mapping.report_start !== undefined && mapping.ends !== undefined)
+    || (mapping.report_start !== undefined && mapping.report_end !== undefined);
+  // A pacing tracker states its own position in the flight, so pacing needs
+  // neither a budget type nor flight dates to be computed.
+  const hasTrackerPacing = mapping.budget !== undefined
+    && (mapping.days_elapsed !== undefined || mapping.expected_delivered_pct !== undefined);
   const lifetimeWithoutFlight = hasLifetime && !hasFlight;
   if (lifetimeWithoutFlight) {
     warnings.push("The budgets in this file are lifetime budgets but it has no flight start/end columns. Pacing needs them to work out what share of the budget this window should have spent, so pacing is reported as unknown.");
@@ -354,8 +441,10 @@ export function analyzeReport(read: ReadResult, mappingOverride?: Mapping): Repo
       convRows > 0 ? `Results on ${convRows.toLocaleString()} rows.` : "No results or purchases column."),
     cap("frequency", "Frequency and saturation", hasFrequency,
       hasFrequency ? "Frequency column present." : "No frequency column."),
-    cap("pacing", "Budget pacing", hasBudget && (!lifetimeWithoutFlight || hasDailyBudget),
+    cap("pacing", "Budget pacing", hasBudget && (hasTrackerPacing || !lifetimeWithoutFlight || hasDailyBudget),
       !hasBudget ? "No budget column — pacing is reported as unknown rather than 0%."
+        : hasTrackerPacing
+          ? "Budget with days elapsed and days left — pacing is measured against the flight directly."
         : lifetimeWithoutFlight && !hasDailyBudget
           ? "Lifetime budgets need flight start and end dates to pace a window. Map \"Flight start\" and \"Flight end\", or pacing stays unknown."
           : "Budget column present. Lifetime budgets are pro-rated to a daily rate across the flight, so pacing asks whether this window spent its share."),
@@ -377,13 +466,16 @@ export function analyzeReport(read: ReadResult, mappingOverride?: Mapping): Repo
     warnings.push("The file was larger than the row limit and was truncated. Split it by date range and upload each part.");
   }
 
-  const claimed = new Set(Object.values(mapping));
+  // Summed columns are read, so they are not "ignored" and must not be
+  // reported as such — the upload panel lists unmapped as what was discarded.
+  const claimed = new Set<number>(Object.values(mapping));
+  for (const cols of Object.values(additive)) for (const c of cols) claimed.add(c);
   const unmapped = headers.filter((h, i) => !claimed.has(i) && String(h ?? "").trim() !== "");
 
   const sample = headers.map((h, i) => ({ header: h, values: rows.slice(0, 5).map((r) => String(r[i] ?? "")) }));
 
   return {
-    headers, mapping, unmapped, sheet: read.sheet, sheets: read.sheets,
+    headers, mapping, additive, unmapped, sheet: read.sheet, sheets: read.sheets,
     level, granularity, tier, currency, dateFormat, numberFormat,
     dateStart: sortedDays[0] ?? null,
     dateEnd: sortedDays[sortedDays.length - 1] ?? null,
@@ -434,6 +526,22 @@ export interface NormCampaign {
   dailyBudget: number; lifetimeBudget: number;
   startTime: string | null; stopTime: string | null;
   days: NormDay[]; adsets: NormAdset[];
+  /**
+   * Flight-to-date pacing, present only on a pacing tracker.
+   *
+   * Such a sheet reports CUMULATIVE spend against a flight budget, plus where
+   * in the flight it sits. That cannot be paced the way daily rows are — the
+   * generic path compares one window's spend to a pro-rated daily rate and
+   * would read a month of cumulative spend as ~2000% over. So the tracker's
+   * own basis is carried through and used instead.
+   */
+  flight?: {
+    budget: number;
+    daysTotal: number | null;
+    daysElapsed: number | null;
+    /** The sheet's own verdict, kept for comparison — never used as the answer. */
+    reportedStatus: string | null;
+  };
 }
 
 export interface NormalizedUpload {
@@ -480,6 +588,7 @@ interface Acc {
   status: string | null;
   objective: string | null;
   format: string | null;
+  flight?: NormCampaign["flight"];
 }
 
 const newAcc = (name: string): Acc => ({
@@ -610,7 +719,17 @@ export function normalizeReport(read: ReadResult, analysis: ReportAnalysis, acco
   };
   const numberAt = (row: string[], f: Field): number | null => {
     const i = mapping[f];
-    return i === undefined ? null : parseNumber(row[i], numberFormat);
+    if (i !== undefined) return parseNumber(row[i], numberFormat);
+    // Split across several columns (e.g. revenue by vertical): sum the parts.
+    // All-empty stays null, so "not reported" never becomes a measured 0.
+    const cols = analysis.additive?.[f];
+    if (!cols?.length) return null;
+    let total: number | null = null;
+    for (const c of cols) {
+      const v = parseNumber(row[c], numberFormat);
+      if (v !== null) total = (total ?? 0) + v;
+    }
+    return total;
   };
 
   // A file with no usable day column still has to produce one dated row, or
@@ -660,11 +779,32 @@ export function normalizeReport(read: ReadResult, analysis: ReportAnalysis, acco
     if (!camp) { camp = newAcc(text(row, "campaign_name") || campaignKey); campaigns.set(campaignKey, camp); }
     touch(camp);
     if (objective && !camp.objective) camp.objective = objective;
-    const cBudget = numberAt(row, "campaign_budget");
+    // A pacing tracker's plain "Budget" is the flight budget, so it behaves as
+    // a lifetime one; its own flight dates then pro-rate it exactly as any
+    // other lifetime budget is. The Ads Manager column wins when both exist.
+    const cBudget = numberAt(row, "campaign_budget") ?? numberAt(row, "budget");
     if (cBudget !== null && camp.budget === null) {
       camp.budget = cBudget;
-      camp.budgetType = text(row, "campaign_budget_type") || "daily";
+      camp.budgetType = numberAt(row, "campaign_budget") !== null
+        ? (text(row, "campaign_budget_type") || "daily")
+        : "lifetime";
     }
+    // Campaign-level flight dates. Ads Manager exports carry them per ad set
+    // and the campaign inherits by roll-up, but a campaign-level tracker has
+    // no ad sets to roll up from — without these its budget cannot be paced.
+    const trackerBudget = numberAt(row, "budget");
+    if (trackerBudget !== null && trackerBudget > 0 && !camp.flight) {
+      camp.flight = {
+        budget: trackerBudget,
+        daysTotal: numberAt(row, "days_total"),
+        daysElapsed: numberAt(row, "days_elapsed"),
+        reportedStatus: text(row, "pacing_status") || null,
+      };
+    }
+    const cStart = parseDate(text(row, "starts") || text(row, "report_start"), dateFormat);
+    const cEnd = parseDate(text(row, "ends") || text(row, "report_end"), dateFormat);
+    if (cStart) camp.starts = minDate(camp.starts, cStart);
+    if (cEnd) camp.ends = maxDate(camp.ends, cEnd);
 
     // ── ad set ──
     const adsetKey = text(row, "adset_id") || text(row, "adset_name");
@@ -772,12 +912,17 @@ export function normalizeReport(read: ReadResult, analysis: ReportAnalysis, acco
 
     // A campaign on ad-set budgets carries none of its own; the roll-up is
     // what makes campaign pacing possible at all for those accounts.
+    // The campaign's own flight wins where it has one; the roll-up is the
+    // fallback for exports that only date their ad sets.
+    rolledStart = camp.starts ?? rolledStart;
+    rolledStop = camp.ends ?? rolledStop;
     const ownDaily = dailyRate(camp.budget, camp.budgetType, rolledStart, rolledStop);
     const campDaily = ownDaily || rolledDaily;
     const campLifetime = rolledLifetime;
 
     outCampaigns.push({
       id: entityId(account, "c", campaignKey),
+      flight: camp.flight ?? undefined,
       name: camp.name,
       status: inferStatus(camp),
       objective: camp.objective || objectiveFallback,
