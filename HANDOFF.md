@@ -81,7 +81,52 @@ too:
 Tests: `npm run test:upload` (parsing/mapping always; persistence with
 `TEST_DATABASE_URL`, which exercises the real bulk inserts and read-back).
 
-## 2c. Month-over-month reports
+## 2c. Access control and honest figures
+
+**Every page and API route requires a session** (`middleware.ts` + `lib/auth.ts`).
+One shared password, `APP_PASSWORD`. Web Crypto only, so it runs in Edge
+middleware with no dependency and no per-request database read; the signing key
+is derived from the password, so changing it invalidates every session.
+
+The decision worth preserving: **no password in production means the deployment
+refuses to serve, rather than serving publicly.** Failing open is what exposed a
+client's ad spend to anyone with the URL. Local dev without the variable stays
+open. Public paths are listed in `lib/auth.ts` and are only the login endpoints,
+Meta's server-to-server callbacks (which no browser cookie can ever reach) and
+the cron endpoint.
+
+This is a shared-secret gate for a single-tenant tool, not per-user identity.
+If roles, audit trails or per-client accounts are ever needed, replace it rather
+than extending it.
+
+**Invented figures never render beside real numbers.** `lib/dataMode.ts` answers
+"does this deployment hold real data?" (any uploaded batch or synced campaign),
+resolved in the root layout and passed down by `DataModeProvider`. Pages used to
+ask `campaignId.startsWith("meta_")` from the Zustand store, which is in-memory —
+so a page reload made a real-data install look like the demo and re-showed
+seeded content. Consumers today:
+
+- sidebar: the "+$4,210 recovered" card is seeded-only, and the footer names the
+  real mode
+- home: brief, KPIs and action queue come from real campaigns and fired alerts
+- ledger: honest empty state instead of five authored outcome rows
+- alerts: real rules instead of a hardcoded array
+
+A pure demo deployment (no database, nothing uploaded) is untouched — that is
+the graded CP1 deliverable and every seeded screen still renders as before.
+
+**Alerts** (`lib/alerts.ts`) evaluate on request from stored daily metrics. Same
+discipline as the reasoning engine: a rule whose metric the data lacks is
+skipped, never reported as passing. Two gates stop confident nonsense — ratios
+below `minSpend` are not judged, and ROAS is withheld unless conversion value
+covers at least half the delivering days, because sparse attribution otherwise
+reads as a 0.1x campaign. On the sample Urban Air export that gate alone removed
+32 of 79 alerts, all of them false.
+
+Tests: `npm run test:auth` (18 checks, including forged and expired tokens) and
+`npm run test:alerts` (20 checks, weighted towards rules that must NOT fire).
+
+## 2d. Month-over-month reports
 
 `lib/monthly.ts` compares **calendar months**; `lib/periods.ts` compares rolling
 28-day windows. Both are wanted — "is this trending down" is a different
@@ -139,6 +184,8 @@ App Review and is out of scope.
 
 | Name | Required | Notes |
 |---|---|---|
+| `APP_PASSWORD` | **yes in production** | Workspace password. Without it a production deployment refuses to serve. |
+| `AUTH_SECRET` | no | Overrides the session signing key; defaults to being derived from `APP_PASSWORD`. |
 | `DATABASE_URL` | yes | Neon pooled connection string. Also all that uploads need — no Meta credentials required. |
 | `META_ACCESS_TOKEN` | live only | System User token, `ads_read` |
 | `META_AD_ACCOUNT_ID` | live only | digits only, no `act_` prefix |

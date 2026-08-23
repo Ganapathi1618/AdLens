@@ -3,27 +3,33 @@ import { useState } from "react";
 import { motion, AnimatePresence } from "framer-motion";
 import { Sparkles, BookOpen, CheckCircle2, XCircle, Clock } from "lucide-react";
 import { recommendations } from "@/lib/data";
-import { useApp } from "@/lib/store";
+import { useDataMode } from "@/components/DataModeProvider";
 import { KpiHero } from "@/components/KpiHero";
 import PageHeader from "@/components/PageHeader";
 import AISummary from "@/components/AISummary";
 import clsx from "clsx";
 
 export default function Ledger() {
-  const activeCampaign = useApp((st) => st.campaignId);
-  const liveMode = Boolean(activeCampaign && activeCampaign.startsWith("meta_"));
+  // Deployment-level: the previous check read an in-memory store, so reloading
+  // this page on a real-data install re-showed the seeded outcome history.
+  const { hasRealData } = useDataMode();
 
   const [filter, setFilter] = useState<"all" | "followed" | "ignored" | "pending">("all");
   const rows = recommendations.filter((r) => filter === "all" || r.status === filter);
 
-  if (liveMode) {
+  if (hasRealData) {
     return (
       <div className="max-w-5xl mx-auto px-8 py-7">
-        <PageHeader kicker="Accountability" title="Recommendation ledger" sub="Live Mode — Meta Graph API" />
+        <PageHeader kicker="Accountability" title="Recommendation ledger" sub="Nothing recorded for this account yet" />
         <div className="card p-8 text-center">
           <BookOpen size={28} className="mx-auto text-mut mb-3" />
           <div className="font-bold text-[15px] mb-1">No recommendation history yet</div>
-          <p className="text-[13px] text-mut max-w-md mx-auto">The ledger records recommendations and their measured outcomes over time; entries appear once recommendations have been issued and acted on for live campaigns.</p>
+          <p className="text-[13px] text-mut max-w-md mx-auto">
+            The ledger records each recommendation, whether you followed it, and what measurably
+            happened afterwards. That needs recommendations to be issued, acted on, and then
+            re-measured against later data — so it stays empty until there is a real outcome to
+            report rather than showing an example.
+          </p>
         </div>
       </div>
     );
