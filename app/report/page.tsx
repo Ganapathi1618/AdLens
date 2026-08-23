@@ -29,23 +29,31 @@ interface ReportData {
 function ReportInner() {
   const sp = useSearchParams();
   const router = useRouter();
-  const id = sp.get("c") || "summer-sale";
+  const id = sp.get("c") ?? "";
   const comparing = sp.get("cmp") === "1";
   const [data, setData] = useState<ReportData | null>(null);
   const [phase, setPhase] = useState(comparing ? "Fetching previous period on demand…" : "Reading the snapshot…");
 
   useEffect(() => {
+    if (!id) return;
     let alive = true;
     (async () => {
-      if (comparing) await new Promise(r => setTimeout(r, 700));
       if (alive) setPhase("Analyst is writing your report…");
       const res = await fetch("/api/ai/report", { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ campaignId: id, compare: comparing }) });
       const d = await res.json();
-      await new Promise(r => setTimeout(r, 400));
       if (alive) setData(d);
     })();
     return () => { alive = false; };
   }, [id, comparing]);
+
+  // Reached directly with no campaign in the URL — send the user to pick one
+  // rather than reporting on an arbitrary default.
+  if (!id) return (
+    <div className="max-w-3xl mx-auto px-8 py-16 text-center">
+      <div className="text-[14px] font-semibold mb-3">No campaign selected for this report.</div>
+      <button onClick={() => router.push("/reporting")} className="btn-primary">Choose a campaign →</button>
+    </div>
+  );
 
   if (!data) return (
     <div className="max-w-3xl mx-auto px-8 py-16 text-center">

@@ -1,17 +1,14 @@
 "use client";
 // Alerts.
 //
-// On a deployment holding real data these are evaluated server-side against
-// the stored daily metrics (lib/alerts.ts). A pure demo install keeps its
-// seeded examples, which is the graded CP1 experience — but the two are never
-// mixed, and seeded rows never appear beside real numbers.
+// Evaluated on request against the daily metrics actually stored for this
+// account (lib/alerts.ts). A rule whose metric the data lacks is skipped, not
+// reported as passing, and nothing is shown that the data did not produce.
 
 import { useEffect, useState } from "react";
 import { motion } from "framer-motion";
 import { AlertTriangle, Bell, ArrowRight, CheckCircle2 } from "lucide-react";
 import { useRouter } from "next/navigation";
-import { alerts as seededAlerts } from "@/lib/data";
-import { useDataMode } from "@/components/DataModeProvider";
 import PageHeader from "@/components/PageHeader";
 import clsx from "clsx";
 import type { Alert } from "@/lib/alerts";
@@ -26,14 +23,12 @@ interface AlertResponse {
 
 export default function Alerts() {
   const router = useRouter();
-  const { hasRealData } = useDataMode();
 
   const [data, setData] = useState<AlertResponse | null>(null);
-  const [loading, setLoading] = useState(false);
+  const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
-    if (!hasRealData) return;
     setLoading(true);
     fetch("/api/db/alerts", { cache: "no-store" })
       .then(async (r) => {
@@ -44,50 +39,8 @@ export default function Alerts() {
       .then(setData)
       .catch((e: unknown) => setError(e instanceof Error ? e.message : "Could not evaluate alerts."))
       .finally(() => setLoading(false));
-  }, [hasRealData]);
+  }, []);
 
-  // ── demo deployment: the seeded examples, unchanged ──────────────
-  if (!hasRealData) {
-    const critical = seededAlerts.filter((a) => a.severity === "Critical");
-    const warning = seededAlerts.filter((a) => a.severity === "Warning");
-    return (
-      <div className="max-w-5xl mx-auto px-8 py-7">
-        <PageHeader kicker="Monitoring" title="Alerts"
-          sub={<><span className="text-bad font-bold">{critical.length} critical</span> · {warning.length} warning · seeded demo data</>} />
-        <div className="space-y-3">
-          {seededAlerts.map((a, i) => {
-            const isCrit = a.severity === "Critical";
-            return (
-              <motion.button key={i} initial={{ opacity: 0, x: -12 }} animate={{ opacity: 1, x: 0 }} transition={{ delay: i * 0.07 }}
-                onClick={() => router.push("/analysis/summer-sale")}
-                className={clsx("card w-full p-4 flex items-center gap-4 text-left card-hover relative overflow-hidden", isCrit && "border-bad/30")}>
-                <span className="absolute left-0 top-0 bottom-0 w-1" style={{ background: isCrit ? "var(--bad)" : "var(--warn)" }} />
-                <span className="w-11 h-11 rounded-2xl grid place-items-center shrink-0"
-                  style={{ background: isCrit ? "var(--bad-soft)" : "var(--warn-soft)" }}>
-                  <AlertTriangle size={19} className={isCrit ? "text-bad" : "text-warn"} />
-                </span>
-                <div className="flex-1 min-w-0">
-                  <div className="flex items-center gap-2 flex-wrap mb-0.5">
-                    <span className={isCrit ? "pill-bad" : "pill-warn"}>{a.severity}</span>
-                    <span className="font-bold text-[15px]">{a.campaign}</span>
-                    <span className="text-[12px] text-mut font-medium">· {a.ago}</span>
-                  </div>
-                  <div className="text-[13px] text-mut font-medium">{a.rule}</div>
-                </div>
-                <div className="text-right shrink-0 mr-2">
-                  <div className={clsx("font-display num text-[24px] leading-none", isCrit ? "text-bad" : "text-warn")}>{a.value}</div>
-                  <div className="text-[11px] text-mut font-semibold mt-1">threshold {a.threshold}</div>
-                </div>
-                <ArrowRight size={17} className="text-mut shrink-0" />
-              </motion.button>
-            );
-          })}
-        </div>
-      </div>
-    );
-  }
-
-  // ── real data ────────────────────────────────────────────────────
   const list = data?.alerts ?? [];
   const critical = list.filter((a) => a.severity === "Critical");
   const warning = list.filter((a) => a.severity === "Warning");

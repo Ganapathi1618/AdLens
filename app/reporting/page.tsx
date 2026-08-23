@@ -4,28 +4,21 @@ import { useRouter } from "next/navigation";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import { Search, FileText, Upload } from "lucide-react";
-import { campaigns } from "@/lib/data";
+import type { Campaign } from "@/lib/types";
 import { PlatBadge, StatusBadge } from "@/components/Badge";
 import PageHeader from "@/components/PageHeader";
 import clsx from "clsx";
-
-// "Acme Corp" rows are the SEEDED demo accounts that ship with the prototype.
-// The connected live account is fetched at runtime and listed first.
-const ACCOUNTS = [
-  { id: "meta", name: "Acme Corp — Main (demo)", sub: "act_12345678 · Meta · 3 campaigns", plat: "meta" as const, spend: "$4,200/mo", camps: 3 },
-  { id: "li", name: "Acme Corp LinkedIn", sub: "id_509876543 · LinkedIn · 2 campaigns", plat: "li" as const, spend: "$2,800/mo", camps: 2 },
-];
+import { money } from "@/lib/currency";
 
 export default function Reporting() {
   const router = useRouter();
-  const [acct, setAcct] = useState("meta");
+  const [acct, setAcct] = useState("");
   const [q, setQ] = useState("");
-  const [camp, setCamp] = useState("summer-sale");
+  const [camp, setCamp] = useState("");
   const [compare, setCompare] = useState(false);
-  const [preset, setPreset] = useState("Last month");
 
   type Accessible = { id: string; name: string; currency: string; kind?: "graph" | "upload"; upload?: { filename: string; campaigns: number; days: number; dateStart: string | null; dateEnd: string | null } };
-  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; accessibleAccounts?: Accessible[]; campaigns: typeof campaigns } | null>(null);
+  const [live, setLive] = useState<{ configured: boolean; account?: { id: string; name: string; currency: string }; accessibleAccounts?: Accessible[]; campaigns: Campaign[] } | null>(null);
 
   // Re-fetched per selected account: an uploaded report only returns its own
   // campaigns when it is the account being asked about.
@@ -34,7 +27,7 @@ export default function Reporting() {
     if (acct.startsWith("live:")) qs.set("account", acct.slice(5));
     fetch(`/api/db/accounts?${qs}`, { cache: "no-store" })
       .then((r) => r.json()).then(setLive)
-      .catch(() => setLive({ configured: false, campaigns: [] as typeof campaigns }));
+      .catch(() => setLive({ configured: false, campaigns: [] }));
   }, [acct]);
 
   // Uploaded reports are selectable here exactly like connected accounts.
@@ -49,14 +42,22 @@ export default function Reporting() {
       camps: a.upload?.campaigns ?? 0,
     }));
   const liveRow = live?.configured && live.account && !acct.startsWith("live:")
-    ? { id: "live", name: live.account.name, sub: `act_${live.account.id} · Meta · ${live.campaigns.length} live campaigns`, plat: "meta" as const, spend: `${live.account.currency}`, camps: live.campaigns.length }
+    ? { id: "live", name: live.account.name, sub: `act_${live.account.id} · Meta · ${live.campaigns.length} campaigns`, plat: "meta" as const, spend: `${live.account.currency}`, camps: live.campaigns.length }
     : null;
-  const allAccounts = [...uploadRows, ...(liveRow ? [liveRow] : []), ...ACCOUNTS];
-  const account = allAccounts.find((a) => a.id === acct) ?? allAccounts[0];
-  const usingLive = acct === "live" || acct.startsWith("live:");
+  const allAccounts = [...uploadRows, ...(liveRow ? [liveRow] : [])];
+  const account = allAccounts.find((a) => a.id === acct) ?? allAccounts[0] ?? null;
   const list = useMemo(() =>
-    (usingLive ? (live?.campaigns ?? []) : campaigns.filter((c) => c.platform === acct && c.status === "Active")).filter((c) => c.name.toLowerCase().includes(q.toLowerCase())).slice(0, 6),
-    [acct, q, live, usingLive]);  // eslint-disable-line react-hooks/exhaustive-deps
+    (live?.campaigns ?? []).filter((c) => c.name.toLowerCase().includes(q.toLowerCase())).slice(0, 6),
+    [q, live]);
+
+  // Select the first account and campaign as soon as they are known, so the
+  // wizard never sits on a selection that no longer exists.
+  useEffect(() => {
+    if (!acct && allAccounts.length) setAcct(allAccounts[0].id);
+  }, [acct, allAccounts]);
+  useEffect(() => {
+    if (live?.campaigns?.length && !live.campaigns.some((c) => c.id === camp)) setCamp(live.campaigns[0].id);
+  }, [live, camp]);
 
   const Step = ({ n, label }: { n: number; label: string }) => (
     <div className="flex items-center gap-2 mb-2.5">
@@ -64,6 +65,28 @@ export default function Reporting() {
       <span className="section-label">{label}</span>
     </div>
   );
+
+  // Nothing to report on until an account is connected or a report uploaded.
+  // Rendering the wizard against no account would read as a broken page.
+  if (!account) {
+    return (
+      <div className="max-w-3xl mx-auto px-8 py-7">
+        <PageHeader kicker="Reports" title="Build a report" sub="No account available yet" />
+        <div className="card p-8 text-center">
+          <FileText size={28} className="mx-auto text-mut mb-3" />
+          <div className="font-bold text-[15px] mb-1">Nothing to report on yet</div>
+          <p className="text-[13px] text-mut max-w-md mx-auto mb-4">
+            Reports are generated from a campaign’s own data. Connect an ad account
+            or upload an Ads Manager export, then come back here.
+          </p>
+          <div className="flex gap-2 justify-center">
+            <button onClick={() => router.push("/check")} className="btn-primary">Connect an account</button>
+            <Link href="/upload" className="btn-ghost"><Upload size={13} /> Upload a report</Link>
+          </div>
+        </div>
+      </div>
+    );
+  }
 
   return (
     <div className="max-w-3xl mx-auto px-8 py-7">
@@ -73,13 +96,7 @@ export default function Reporting() {
       <Step n={1} label="Select ad account" />
       <div className="card overflow-hidden divide-y divide-line mb-2">
         {allAccounts.map((a) => (
-          <button key={a.id} onClick={() => {
-            setAcct(a.id);
-            const first = a.id === "live" || a.id.startsWith("live:")
-              ? live?.campaigns?.[0]
-              : campaigns.find((c) => c.platform === a.id && c.status === "Active");
-            if (first) setCamp(first.id);
-          }}
+          <button key={a.id} onClick={() => setAcct(a.id)}
             className={clsx("w-full flex items-center gap-3 px-4 py-3.5 text-left transition-colors", acct === a.id ? "" : "hover:bg-raised")}
             style={acct === a.id ? { background: "var(--accent-soft)" } : undefined}>
             <span className={clsx("w-[18px] h-[18px] rounded-full border-2 grid place-items-center shrink-0", acct === a.id ? "border-accent bg-accent" : "border-line2 bg-surface")}>
@@ -103,7 +120,7 @@ export default function Reporting() {
 
       <motion.div key={acct} initial={{ opacity: 0, y: -6 }} animate={{ opacity: 1, y: 0 }}
         className="card p-4 mb-5 flex gap-7 flex-wrap text-[13px]">
-        {[["Account", account.name], ["Platform", account.plat === "meta" ? "Meta" : "LinkedIn"], ["Monthly spend", account.spend], ["Active campaigns", String(account.camps)]].map(([l, v]) => (
+        {[["Account", account.name], ["Platform", account.plat === "meta" ? "Meta" : "LinkedIn"], ["Currency", account.spend], ["Campaigns", String(account.camps)]].map(([l, v]) => (
           <div key={l}><div className="text-[10px] font-bold uppercase tracking-wide text-mut mb-0.5">{l}</div><div className="font-bold">{v}</div></div>
         ))}
         <div><div className="text-[10px] font-bold uppercase tracking-wide text-mut mb-0.5">Status</div><StatusBadge s="Active" /></div>
@@ -125,34 +142,22 @@ export default function Reporting() {
               {camp === c.id && <span className="w-1.5 h-1.5 rounded-full bg-white" />}
             </span>
             <div className="text-[13.5px] font-bold">{c.name}</div>
-            <span className="ml-auto text-[11px] text-mut font-medium num">${c.spend.toLocaleString()} · {c.roas}x · {c.ctr}%</span>
+            <span className="ml-auto text-[11px] text-mut font-medium num">{money(c.spend, c.currency)} · {c.roas > 0 ? `${c.roas}x` : "no revenue"} · {c.ctr}%</span>
           </button>
         ))}
       </div>
 
       <Step n={3} label="Report period" />
-      <div className="flex items-center gap-2.5 mb-4 flex-wrap">
-        <div className="flex rounded-xl border border-line2 bg-surface p-1">
-          {["Last week", "Last month", "Overall", "Custom"].map((p) => (
-            <button key={p} onClick={() => setPreset(p)} className={clsx("relative text-[12px] font-bold px-3.5 py-1.5 rounded-lg", preset === p ? "text-white" : "text-mut hover:text-ink")}>
-              {preset === p && <motion.span layoutId="rep-pill" className="absolute inset-0 rounded-lg" style={{ background: "var(--hero-grad)" }} transition={{ type: "spring", stiffness: 400, damping: 34 }} />}
-              <span className="relative z-10">{p}</span>
-            </button>
-          ))}
-        </div>
-        {preset === "Custom" ? <CustomDates /> : <span className="text-[12px] text-mut font-medium">{preset === "Last week" ? "Jul 3 – Jul 9" : preset === "Last month" ? "Jun 1 – Jun 30, 2025" : "Mar 1 – Jul 9 (all time)"}</span>}
-      </div>
-
       <div className="card p-4 mb-5 flex items-center gap-3 flex-wrap">
         <button onClick={() => setCompare(!compare)} className={clsx("w-10 h-[22px] rounded-full transition-colors relative", compare ? "bg-accent" : "bg-line2")}>
           <motion.span layout className="absolute top-[3px] w-4 h-4 bg-white rounded-full shadow" animate={{ left: compare ? 21 : 3 }} />
         </button>
-        <span className="text-[13px] font-semibold">Compare against a previous period</span>
-        {compare && (
-          <motion.span initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="pill-good ml-1">
-            vs May 1 – May 31, 2025
-          </motion.span>
-        )}
+        <div>
+          <div className="text-[13px] font-semibold">Compare against the preceding period</div>
+          <div className="text-[11.5px] text-mut font-medium mt-0.5">
+            The report covers everything stored for this campaign, split in half against itself when comparison is on.
+          </div>
+        </div>
       </div>
 
       <div className="flex justify-end">
@@ -160,18 +165,6 @@ export default function Reporting() {
           <FileText size={15} /> Generate report →
         </button>
       </div>
-    </div>
-  );
-}
-
-function CustomDates() {
-  const [from, setFrom] = useState("2025-06-01");
-  const [to, setTo] = useState("2025-06-30");
-  return (
-    <div className="flex items-center gap-1.5 text-[12px]">
-      <input type="date" value={from} onChange={(e) => { setFrom(e.target.value); if (to < e.target.value) setTo(e.target.value); }} className="border border-line2 rounded-xl px-2.5 py-1.5 bg-surface" />
-      <span className="text-mut">to</span>
-      <input type="date" value={to} min={from} onChange={(e) => setTo(e.target.value < from ? from : e.target.value)} className="border border-line2 rounded-xl px-2.5 py-1.5 bg-surface" />
     </div>
   );
 }

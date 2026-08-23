@@ -5,8 +5,7 @@ import { useRouter } from "next/navigation";
 import { motion } from "framer-motion";
 import { LineChart, Line, XAxis, YAxis, Tooltip, ResponsiveContainer, CartesianGrid } from "recharts";
 import { ArrowLeft, ImageIcon, Video, LayoutGrid, Wallet, DollarSign, Target, MousePointerClick, Coins, Repeat } from "lucide-react";
-import { getAdset } from "@/lib/data";
-import type { AdSet } from "@/lib/data";
+import type { AdSet } from "@/lib/types";
 import { sym } from "@/lib/currency";
 import { HealthDot, RankBadge, ActionPill, CreativeScore } from "@/components/Badge";
 import { KpiHero } from "@/components/KpiHero";
@@ -16,21 +15,19 @@ import clsx from "clsx";
 
 export default function AdsetDetail({ params }: { params: { id: string } }) {
   const { id } = params;
-  const isLive = id.startsWith("meta_");
-  const [liveAdset, setLiveAdset] = useState<AdSet | null>(null);
-  const [liveCurrency, setLiveCurrency] = useState<string>("USD");
+  const [a, setAdset] = useState<AdSet | null>(null);
+  const [campaignName, setCampaignName] = useState<string | null>(null);
+  const [currency, setCurrency] = useState<string | undefined>(undefined);
   const [liveErr, setLiveErr] = useState(false);
   useEffect(() => {
-    if (!isLive) return;
     fetch(`/api/db/adset-detail?id=${encodeURIComponent(id)}&t=${Date.now()}`, { cache: "no-store" })
       .then((r) => (r.ok ? r.json() : Promise.reject()))
-      .then((d) => { setLiveAdset(d.adset); if (d.currency) setLiveCurrency(d.currency); })
+      .then((d) => { setAdset(d.adset); setCampaignName(d.campaignName ?? null); if (d.currency) setCurrency(d.currency); })
       .catch(() => setLiveErr(true));
-  }, [id, isLive]);
+  }, [id]);
   const router = useRouter();
-  const a = isLive ? liveAdset : getAdset(id);
-  const cur = sym(isLive ? liveCurrency : "USD");
-  if (!a) return <div className="p-10 text-[14px]">{isLive && !liveErr ? "Loading ad set…" : "Adset not found."}</div>;
+  const cur = sym(currency);
+  if (!a) return <div className="p-10 text-[14px]">{liveErr ? "Ad set not found." : "Loading ad set…"}</div>;
 
   const trend = a.ctrTrend.map((v, i) => ({ d: `D${i + 1}`, ctr: v, cpa: a.cpaTrend[i] }));
   const deltaTone = (d: string, goodUp: boolean | null): "good" | "bad" | "neutral" => {
@@ -49,7 +46,7 @@ export default function AdsetDetail({ params }: { params: { id: string } }) {
       <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }}
         className="flex items-center gap-2.5 flex-wrap mb-5">
         <div>
-          <div className="section-label mb-1.5">Summer Sale — Broad · Ad set</div>
+          <div className="section-label mb-1.5">{campaignName ? `${campaignName} · Ad set` : "Ad set"}</div>
           <div className="flex items-center gap-3">
             <h1 className="font-display text-[30px] tracking-tight">{a.name}</h1>
             <span className={clsx("inline-flex items-center gap-1.5",

@@ -277,8 +277,8 @@ export async function buildEvidence(campaignId: string): Promise<Evidence | null
   // Revenue is "tracked" only if the source actually reported value. A live
   // account without a purchase pixel reports spend/clicks but no revenue —
   // reporting 0x as a verdict would be a false negative, so we flag it instead.
-  // Live campaigns report their real sync time; the seeded "Today 02:00" string
-  // must never be presented as the provenance of live data.
+  // Every campaign reports its real sync time — or, for an uploaded report,
+  // the time the file was ingested. Neither is ever presented as the other.
   let liveSnapshot: { syncedAt: string; mode: string } | null = null;
   const { isUploadedCampaign } = await import("./uploads");
   const uploaded = isUploadedCampaign(c);

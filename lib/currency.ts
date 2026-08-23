@@ -41,7 +41,7 @@ export interface CurrencyBearing { currency?: string | null; id?: string }
  * Totals across currencies are meaningless — ₹100 + $100 is not 200 of
  * anything — so callers must use this to decide whether a combined figure can
  * be shown at all. Campaigns with no reported currency are treated as USD,
- * matching the seeded dataset.
+ * the default when an account reports none.
  */
 export function commonCurrency(items: CurrencyBearing[]): string | null {
   const codes = new Set(items.map((c) => String(c.currency || "USD").toUpperCase()));

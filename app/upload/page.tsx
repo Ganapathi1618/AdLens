@@ -16,7 +16,6 @@ import PageHeader from "@/components/PageHeader";
 import { FIELD_SPECS, TIER_LABEL, TIER_BLURB, type ReportAnalysis, type Field, type Mapping } from "@/lib/reportFields";
 import type { UploadBatch } from "@/lib/uploads";
 import { money } from "@/lib/currency";
-import { useDataMode } from "@/components/DataModeProvider";
 
 interface Campaign { id: string; name: string; spend: number; roas: number }
 
@@ -43,9 +42,6 @@ export default function UploadPage() {
   const [appendTo, setAppendTo] = useState<string>("");
   const [deleting, setDeleting] = useState<string | null>(null);
   const inputRef = useRef<HTMLInputElement>(null);
-  // Committing or deleting changes whether this deployment holds real data,
-  // which decides whether seeded demo figures render elsewhere.
-  const { refresh: refreshDataMode } = useDataMode();
 
   const timezone = useMemo(() => {
     try { return Intl.DateTimeFormat().resolvedOptions().timeZone || "UTC"; } catch { return "UTC"; }
@@ -121,7 +117,6 @@ export default function UploadPage() {
       if (!res.ok || !d.ok) throw new Error(d.error ?? "Could not save that upload.");
       setCommitted(d.batch);
       refreshBatches();
-      refreshDataMode();
       const acct = await fetch(`/api/db/accounts?account=${encodeURIComponent(d.batch.id)}&t=${Date.now()}`, { cache: "no-store" })
         .then((r) => r.json()).catch(() => null);
       setCampaigns((acct?.campaigns ?? []).slice(0, 8));
@@ -139,7 +134,6 @@ export default function UploadPage() {
       const res = await fetch(`/api/upload?id=${encodeURIComponent(id)}`, { method: "DELETE" });
       if (!res.ok) throw new Error((await res.json().catch(() => ({})))?.error ?? "Delete failed");
       refreshBatches();
-      refreshDataMode();
       if (committed?.id === id) { setCommitted(null); setCampaigns([]); }
     } catch (e: unknown) {
       setError(e instanceof Error ? e.message : "Could not delete that upload.");

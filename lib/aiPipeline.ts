@@ -18,7 +18,7 @@ import { generateNarrative } from "./llm";
 import { dataSource } from "./datasource";
 import { LIVE_PREFIX, getLastSynced, useConnectedAccount } from "./meta";
 import { isUploadedCampaign } from "./uploads";
-import type { Campaign, AdSet } from "./data";
+import type { Campaign, AdSet } from "./types";
 
 export type QueryKind =
   | "diagnose"    // why is X doing Y
@@ -301,7 +301,7 @@ function taskHint(parsed: ParsedQuery): string {
  */
 export function sourceLabel(r: { isLive: boolean; isUpload: boolean }): string {
   if (r.isUpload) return "uploaded report file (a frozen extract, not a live read)";
-  return r.isLive ? "Meta Ads API (live)" : "seeded dataset";
+  return "Meta Ads API (live)";
 }
 
 export async function generateAnswer(ctx: QueryContext, stages: string[]): Promise<PipelineAnswer> {

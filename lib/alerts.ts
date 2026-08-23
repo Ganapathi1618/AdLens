@@ -7,7 +7,7 @@
 // threshold alerts have fired" forever. These are the rules that make that
 // sentence mean something.
 
-import type { Campaign } from "./data";
+import type { Campaign } from "./types";
 import type { DayPoint } from "./datasource";
 
 export type Severity = "Critical" | "Warning";

@@ -1,4 +1,4 @@
-import type { CampaignStatus } from "./data";
+import type { CampaignStatus } from "./types";
 
 // ── Meta status → display status ────────────────────────────────────
 // Meta reports two fields. `status` is what the user set; `effective_status`

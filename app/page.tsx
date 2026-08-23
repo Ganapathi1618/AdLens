@@ -1,31 +1,28 @@
 "use client";
 // Today's Brief.
 //
-// Two modes, one screen. A pure demo deployment renders the authored CP1 brief
-// exactly as before. A deployment holding real data builds the same layout
-// from that data: portfolio KPIs from the real campaigns, and the action queue
-// from the threshold rules in lib/alerts.ts.
+// Built entirely from what this deployment actually holds: portfolio KPIs from
+// the stored campaigns, and the action queue from the threshold rules in
+// lib/alerts.ts, each card carrying the evidence its rule fired on.
 //
 // The rule that shapes this file: the brief never states a number nobody
-// measured. The seeded copy quotes specific figures ("$1,780/mo is leaking",
-// "+$2,500/mo") that are true only of the seeded dataset, so none of it may
-// appear beside a real account.
+// measured. With nothing synced or uploaded it says so and points at the two
+// ways in, rather than filling the screen with an example.
 
 import { useEffect, useMemo, useState } from "react";
 import Link from "next/link";
 import { motion } from "framer-motion";
 import {
-  AlertTriangle, Hourglass, TrendingUp, Search, FileText, BookOpen, ArrowRight,
+  AlertTriangle, Hourglass, Search, FileText, ArrowRight,
   DollarSign, Target, MousePointerClick, Wallet, Upload, CheckCircle2,
 } from "lucide-react";
 import { useRouter } from "next/navigation";
 import { useApp } from "@/lib/store";
-import { campaigns as seededCampaigns, type Campaign } from "@/lib/data";
+import type { Campaign } from "@/lib/types";
 import { KpiHero } from "@/components/KpiHero";
 import HealthScore from "@/components/HealthScore";
 import AISummary from "@/components/AISummary";
 import { sym, commonCurrency, sumByCurrency, formatMixed } from "@/lib/currency";
-import { useDataMode } from "@/components/DataModeProvider";
 import type { Alert } from "@/lib/alerts";
 
 const stagger = { animate: { transition: { staggerChildren: 0.07 } } };
@@ -41,52 +38,31 @@ interface Action {
   href: string;
 }
 
-const SEEDED_ACTIONS: Action[] = [
-  {
-    icon: AlertTriangle, tone: "bad", tag: "Fix now", impact: "−$83/day burning",
-    title: "Summer Sale — ROAS below break-even",
-    body: "25–44 Male crashed to 1.2x. One fatigued video ad is the culprit.",
-    href: "/analysis/summer-sale",
-  },
-  {
-    icon: Hourglass, tone: "warn", tag: "This week", impact: "$4.4k/mo at risk",
-    title: "18–34 Female saturating in ~4 days",
-    body: "Frequency 8.2, reach 94%. Fresh creative needed before CTR drops.",
-    href: "/analysis/summer-sale",
-  },
-  {
-    icon: TrendingUp, tone: "good", tag: "Opportunity", impact: "+$720–1,440/wk",
-    title: "Lookalike 1% is ready to scale",
-    body: "3.6x ROAS with 59% of the audience untouched.",
-    href: "/analysis/summer-sale",
-  },
-];
-
 export default function Home() {
   const router = useRouter();
   const setCampaign = useApp((s) => s.setCampaign);
-  const { hasRealData, uploads } = useDataMode();
 
-  const [real, setReal] = useState<Campaign[] | null>(null);
+  const [camps, setCamps] = useState<Campaign[] | null>(null);
   const [alerts, setAlerts] = useState<Alert[] | null>(null);
+  const [uploads, setUploads] = useState(0);
 
   useEffect(() => {
-    if (!hasRealData) return;
-    fetch("/api/db/campaigns-merged", { cache: "no-store" })
+    fetch(`/api/db/accounts?t=${Date.now()}`, { cache: "no-store" })
       .then((r) => r.json())
-      .then((all: Campaign[]) => setReal(Array.isArray(all) ? all.filter((c) => String(c.id).startsWith("meta_")) : []))
-      .catch(() => setReal([]));
+      .then((d) => {
+        setCamps(Array.isArray(d?.campaigns) ? d.campaigns : []);
+        setUploads((d?.accessibleAccounts ?? []).filter((a: { kind?: string }) => a.kind === "upload").length);
+      })
+      .catch(() => setCamps([]));
     fetch("/api/db/alerts", { cache: "no-store" })
       .then((r) => r.json())
       .then((d) => setAlerts(Array.isArray(d?.alerts) ? d.alerts : []))
       .catch(() => setAlerts([]));
-  }, [hasRealData]);
+  }, []);
 
-  // Which campaigns this brief is about. Seeded until real ones arrive.
-  const pool: Campaign[] = hasRealData ? real ?? [] : seededCampaigns;
+  const pool = useMemo(() => camps ?? [], [camps]);
   const active = useMemo(
-    () => (hasRealData ? pool.filter((c) => c.status === "Active" || c.spend > 0) : pool.filter((c) => c.status === "Active")),
-    [pool, hasRealData]);
+    () => pool.filter((c) => c.status === "Active" || c.spend > 0), [pool]);
 
   const spend = active.reduce((s, c) => s + c.spend, 0);
   const rev = active.reduce((s, c) => s + c.revenue, 0);
@@ -98,24 +74,15 @@ export default function Home() {
   const spendParts = sumByCurrency(active, (c) => c.spend);
   const revParts = sumByCurrency(active, (c) => c.revenue);
 
-  const critical = hasRealData
-    ? (alerts ?? []).filter((a) => a.severity === "Critical").length
-    : active.filter((c) => c.health === "critical").length;
-  const watch = hasRealData
-    ? (alerts ?? []).filter((a) => a.severity === "Warning").length
-    : active.filter((c) => c.health === "watch").length;
+  const critical = (alerts ?? []).filter((a) => a.severity === "Critical").length;
+  const watch = (alerts ?? []).filter((a) => a.severity === "Warning").length;
 
   const healthScore = active.length
     ? Math.max(5, Math.round(100 - (critical / active.length) * 220 - (watch / active.length) * 60))
     : 100;
 
-  const openSummer = () => {
-    setCampaign("summer-sale", "Summer Sale — Broad");
-    router.push("/analysis/summer-sale");
-  };
-
-  // Real actions come from rules that actually fired, with their own evidence.
-  const realActions: Action[] = (alerts ?? []).slice(0, 3).map((a) => ({
+  // Actions come from rules that actually fired, each with its own evidence.
+  const actions: Action[] = (alerts ?? []).slice(0, 3).map((a) => ({
     icon: a.severity === "Critical" ? AlertTriangle : Hourglass,
     tone: a.severity === "Critical" ? "bad" : "warn",
     tag: a.severity === "Critical" ? "Fix now" : "Watch",
@@ -124,16 +91,52 @@ export default function Home() {
     body: a.detail,
     href: `/analysis/${a.campaignId}`,
   }));
-  const actions = hasRealData ? realActions : SEEDED_ACTIONS;
 
-  const waiting = hasRealData && (real === null || alerts === null);
+  const waiting = camps === null || alerts === null;
+
+  // ── nothing brought in yet ───────────────────────────────────────
+  if (!waiting && pool.length === 0) {
+    return (
+      <div className="max-w-6xl mx-auto px-8 py-7">
+        <motion.div initial={{ opacity: 0, y: 8 }} animate={{ opacity: 1, y: 0 }} className="mb-7">
+          <div className="section-label mb-2">Daily brief</div>
+          <h1 className="font-display text-[40px] leading-[1.05] tracking-tight">
+            Welcome to AdLens.<br /><span className="gradient-text">Bring in your first campaign.</span>
+          </h1>
+          <p className="text-[13px] text-mut mt-3 max-w-lg leading-relaxed">
+            AdLens analyses what your ad account actually reported. Connect an account to
+            sync it, or upload an Ads Manager export if you would rather not grant access.
+          </p>
+        </motion.div>
+        <motion.div variants={stagger} initial="initial" animate="animate" className="grid grid-cols-2 gap-3">
+          {[
+            { href: "/check", icon: Search, title: "Connect an ad account", body: "Grant access with Facebook, pick the accounts to share, and sync campaigns, ad sets and ads." },
+            { href: "/upload", icon: Upload, title: "Upload a report", body: "Drop in a .csv or .xlsx export from Ads Manager. No credentials, same analysis." },
+          ].map(({ href, icon: Icon, title, body }) => (
+            <motion.div key={href} variants={item}>
+              <Link href={href} className="card card-hover p-5 flex items-center gap-4 group">
+                <span className="w-12 h-12 rounded-2xl grid place-items-center text-white shrink-0 shadow-hero"
+                  style={{ background: "var(--hero-grad)" }}>
+                  <Icon size={20} />
+                </span>
+                <div className="flex-1">
+                  <div className="font-bold text-[15px] mb-0.5">{title}</div>
+                  <p className="text-[12px] text-mut leading-relaxed">{body}</p>
+                </div>
+                <ArrowRight size={17} className="text-mut group-hover:text-accent group-hover:translate-x-1 transition-all shrink-0" />
+              </Link>
+            </motion.div>
+          ))}
+        </motion.div>
+      </div>
+    );
+  }
+
   const headline = waiting
     ? "Reading your data…"
-    : !hasRealData
-      ? "3 things need you today."
-      : actions.length === 0
-        ? "Nothing needs you today."
-        : `${actions.length} thing${actions.length === 1 ? "" : "s"} need${actions.length === 1 ? "s" : ""} you today.`;
+    : actions.length === 0
+      ? "Nothing needs you today."
+      : `${actions.length} thing${actions.length === 1 ? "" : "s"} need${actions.length === 1 ? "s" : ""} you today.`;
 
   return (
     <div className="max-w-6xl mx-auto px-8 py-7">
@@ -142,9 +145,7 @@ export default function Home() {
         className="flex items-end justify-between flex-wrap gap-6 mb-6">
         <div>
           <div className="section-label mb-2">
-            {hasRealData
-              ? `Daily brief · ${active.length} campaign${active.length === 1 ? "" : "s"} with delivery`
-              : "Daily brief · synced 02:00"}
+            Daily brief · {active.length} campaign{active.length === 1 ? "" : "s"} with delivery
           </div>
           <h1 className="font-display text-[40px] leading-[1.05] tracking-tight">
             Good morning.<br /><span className="gradient-text">{headline}</span>
@@ -152,23 +153,15 @@ export default function Home() {
         </div>
         <div className="card px-5 py-4">
           <HealthScore score={healthScore} label="Portfolio health"
-            detail={hasRealData
-              ? `${critical} critical · ${watch} warning · ${active.length} campaigns`
-              : `${critical} critical · ${watch} watching · ${active.length} active campaigns`} />
+            detail={`${critical} critical · ${watch} warning · ${active.length} campaigns`} />
         </div>
       </motion.div>
 
       {/* ── AI Summary ────────────────────────────────────────── */}
-      {!hasRealData ? (
-        <AISummary meta="reasoning engine · verified figures" cta="Review Summer Sale" onCta={openSummer}>
-          Your portfolio returns <strong>{roas.toFixed(1)}x blended</strong>, but <strong>$1,780/mo is leaking</strong> into
-          below-break-even adsets. Fixing the fatigued video in Summer Sale and scaling Lookalike 1% would swing
-          roughly <strong>+$2,500/mo</strong> — both are one-click actions.
-        </AISummary>
-      ) : waiting ? null : (
+      {!waiting && (
         <AISummary meta="threshold rules · your data only">
           {active.length === 0 ? (
-            <>No campaigns have recorded delivery yet. Connect an ad account or upload a report to get a brief.</>
+            <>No campaigns have recorded delivery yet. Sync an account or upload a report to get a brief.</>
           ) : (
             <>
               {active.length} campaign{active.length === 1 ? "" : "s"} with delivery
@@ -190,36 +183,33 @@ export default function Home() {
       {/* ── Portfolio KPIs ────────────────────────────────────── */}
       <div className="grid grid-cols-4 gap-3 mb-6">
         {portfolioCur
-          ? <KpiHero i={0} label="Spend" icon={Wallet} value={spend} prefix={sym(portfolioCur)} sub={hasRealData ? "in this data" : "all active"} />
+          ? <KpiHero i={0} label="Spend" icon={Wallet} value={spend} prefix={sym(portfolioCur)} sub="in this data" />
           : <KpiHero i={0} label="Spend" icon={Wallet} rawValue={formatMixed(spendParts)} sub="across currencies" />}
         {/* Revenue that was never reported is shown as unavailable, not as 0. */}
-        {!revenueTracked && hasRealData
+        {!revenueTracked
           ? <KpiHero i={1} label="Revenue" icon={DollarSign} rawValue="not reported" sub="no conversion value in this data" />
           : portfolioCur
             ? <KpiHero i={1} label="Revenue" icon={DollarSign} value={rev} prefix={sym(portfolioCur)} />
             : <KpiHero i={1} label="Revenue" icon={DollarSign} rawValue={formatMixed(revParts)} sub="across currencies" />}
-        {!revenueTracked && hasRealData
+        {!revenueTracked
           ? <KpiHero i={2} label="Blended ROAS" icon={Target} rawValue="—" sub="needs conversion value" />
           : portfolioCur
             ? <KpiHero i={2} label="Blended ROAS" icon={Target} value={roas} decimals={1} suffix="x" />
             : <KpiHero i={2} label="Blended ROAS" icon={Target} rawValue="—" sub="mixed currencies" />}
-        <KpiHero i={3} label={hasRealData ? "Critical alerts" : "Critical campaigns"} icon={MousePointerClick}
+        <KpiHero i={3} label="Critical alerts" icon={MousePointerClick}
           rawValue={String(critical)} delta={`${watch} warning`} deltaTone="bad"
-          sub={hasRealData ? "crossed a threshold" : "below break-even"} alert />
+          sub="crossed a threshold" alert />
       </div>
 
       {/* ── Action queue ──────────────────────────────────────── */}
       <div className="flex items-center justify-between mb-3">
-        <div className="section-label">
-          {hasRealData ? "Action queue — from your threshold rules" : "Action queue — ranked by impact"}
-        </div>
-        <Link href={hasRealData ? "/alerts" : "/ledger"}
-          className="text-[12px] font-bold text-accent inline-flex items-center gap-1 hover:underline">
-          {hasRealData ? <><AlertTriangle size={13} /> See all alerts</> : <><BookOpen size={13} /> Track outcomes in Ledger</>}
+        <div className="section-label">Action queue — from your threshold rules</div>
+        <Link href="/alerts" className="text-[12px] font-bold text-accent inline-flex items-center gap-1 hover:underline">
+          <AlertTriangle size={13} /> See all alerts
         </Link>
       </div>
 
-      {hasRealData && !waiting && actions.length === 0 && (
+      {!waiting && actions.length === 0 && (
         <div className="card p-6 mb-7 flex items-start gap-3.5">
           <CheckCircle2 size={20} className="text-good shrink-0 mt-0.5" />
           <div>
@@ -265,8 +255,8 @@ export default function Home() {
       <div className="section-label mb-3">Workflows</div>
       <motion.div variants={stagger} initial="initial" animate="animate" className="grid grid-cols-2 gap-3">
         {[
-          { href: "/check", icon: Search, title: "Deep-dive a campaign", body: "Adsets, creatives, frequency, anomalies and AI insights — or compare across platforms." },
-          hasRealData && uploads === 0
+          { href: "/check", icon: Search, title: "Deep-dive a campaign", body: "Ad sets, creatives, frequency, anomalies and AI insights grounded in your own data." },
+          uploads === 0
             ? { href: "/upload", icon: Upload, title: "Upload a report", body: "No account access for a client? Drop in an Ads Manager export and analyse it the same way." }
             : { href: "/reporting", icon: FileText, title: "Generate a client report", body: "Three steps to a client-ready report with charts and an AI narrative that cites your data." },
         ].map(({ href, icon: Icon, title, body }) => (

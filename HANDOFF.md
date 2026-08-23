@@ -15,19 +15,25 @@ AI-does-explanation split is actually built, not just claimed."*
 
 **Never break that split.** The LLM must not be allowed to originate a metric.
 
-## 2. Two modes, one app
+## 2. One source of truth
 
-| | Demo Mode | Live Mode |
+Everything the app displays comes out of Postgres. Rows get there two ways:
+
+| | Synced | Uploaded |
 |---|---|---|
-| Source | `lib/data.ts` — 55 seeded campaigns, deterministic | Meta Graph API → Neon Postgres |
-| Campaign IDs | `summer-sale`, `c7`, … | `meta_<raw Meta id>` |
-| Chosen by | any id **without** the `meta_` prefix | id **starting** `meta_` |
+| Source | Meta Graph API via `/api/sync/meta` | an Ads Manager export via `/api/upload` |
+| Ad account id | digits only, from Meta | `up` + 12 hex |
+| `meta_campaigns.data_source` | `graph` | `upload` |
 
-Routing is by ID prefix, in `MergedDataSource` (`lib/datasource.ts`). There is no
-global mode flag — the prefix *is* the mode. Demo Mode must keep working
-untouched; it is the graded CP1 deliverable.
+Both write the same `meta_*` tables and every campaign id carries the `meta_`
+prefix, so there is one read path, one reasoning engine and one set of pages.
 
-## 2b. Uploaded reports (third mode)
+**The seeded demo dataset has been removed.** There is no Mock data source, no
+`DATA_SOURCE` env var and no fallback portfolio: a deployment with nothing
+synced and nothing uploaded shows empty states, not invented campaigns. Anything
+displayed traces to something the platform reported or a file the user supplied.
+
+## 2b. Uploaded reports
 
 A deployment with **no Meta credentials at all** is a supported way to run
 AdLens. `/upload` takes an Ads Manager export and stores it as a **synthetic ad
@@ -75,8 +81,9 @@ too:
   the campaign row. `/api/db/campaign-detail` and `/api/db/periods` are called
   with a campaign id alone, and previously fell back to `META_AD_ACCOUNT_ID` —
   returning nothing for any campaign that account did not own.
-- `getDataSource()` selects `MergedDataSource` on `DATABASE_URL` alone. Gating
-  it on Meta env vars left the reasoning engine reading the seeded dataset.
+- `getDataSource()` returns the live reader unconditionally. It used to be
+  gated on the Meta env vars, which left the reasoning engine unable to read
+  uploaded rows on a deployment with no Meta credentials.
 
 Tests: `npm run test:upload` (parsing/mapping always; persistence with
 `TEST_DATABASE_URL`, which exercises the real bulk inserts and read-back).
@@ -191,14 +198,12 @@ App Review and is out of scope.
 | `META_AD_ACCOUNT_ID` | live only | digits only, no `act_` prefix |
 | `META_CURRENCY` | live only | e.g. `INR` — without it money renders as `$` |
 | `GROQ_API_KEY` / `GEMINI_API_KEY` / `ANTHROPIC_API_KEY` / … | optional | any one enables the LLM narrative; without one the deterministic analyst answers |
-| `DATA_SOURCE` | optional | `merged` (default when Meta configured), `meta`, `mock` |
 | `LLM_PROVIDER`, `LLM_MAX_TOKENS` | optional | force a provider / raise token budget |
 
 Env vars only bind on deploy — **always redeploy after changing them.**
 
 ## 5. Current state — verified
 
-- Demo Mode: all 8 pages render, seeded content and authored deltas unchanged
 - Live sync: `{"synced":true,"campaigns":2,"dayRows":26,"adsets":2,"ads":4,"currency":"INR"}`
 - Live campaign analysis renders with real values: spend ₹3,051, 252,256
   impressions, 2.93% CTR, ₹0.41 CPC, real date range, INR
@@ -277,8 +282,8 @@ yet been captured after the hierarchical walk shipped.
 
 ```
 lib/
-  data.ts          seeded dataset + shared types (Campaign, AdSet, AdItem)
-  datasource.ts    DataSource interface; Mock / Meta / Merged implementations
+  types.ts         shared domain types (Campaign, AdSet, AdItem) — no values
+  datasource.ts    DataSource interface; LiveDataSource reads the meta_* tables
   meta.ts          Graph API fetchers + Neon readers/mappers  ← live logic
   meta-labels.ts   objective → result-type ladder (client-safe)
   reasoning.ts     evidence builder, deterministic analyst, citation verifier

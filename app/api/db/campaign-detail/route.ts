@@ -1,9 +1,9 @@
 // Campaign + adsets + daily series for ONE campaign, through the DataSource seam.
 // Used by the analysis page for live ("meta_") ids. Seeded ids keep their existing
-// synchronous path, so the seeded demo is untouched by this route.
+// synchronous path, so nothing else in the app is affected by this route.
 
 import { NextResponse } from "next/server";
-import { MergedDataSource } from "@/lib/datasource";
+import { LiveDataSource } from "@/lib/datasource";
 import { resolveRange, type PresetKey } from "@/lib/daterange";
 
 export const dynamic = "force-dynamic";
@@ -41,7 +41,7 @@ export async function GET(req: Request) {
   }
   const range = resolved;
   try {
-    const src = new MergedDataSource();
+    const src = new LiveDataSource();
     const campaign = await src.getCampaign(id);
     if (!campaign) return NextResponse.json({ error: "not found" }, { status: 404, ...NO_STORE });
     // Adsets and series are reported independently so one failing doesn't hide
@@ -75,7 +75,7 @@ export async function GET(req: Request) {
     }
     // Coverage: what was ASKED FOR vs what is actually stored. A short series
     // must be visibly incomplete, never silently presented as the full period.
-    const dates = series.map((d) => String((d as Record<string, unknown>).date ?? "")).filter(Boolean);
+    const dates = series.map((d) => d.date ?? "").filter(Boolean);
     const coverage = {
       requested: { since: range.since, until: range.until, days: range.days },
       returned: {
@@ -104,7 +104,7 @@ export async function GET(req: Request) {
           uploadedAt: batch.uploadedAt,
           accountId: batch.id,
         }
-      : { kind: (isLive ? "graph" : "seeded") as "graph" | "seeded", label: isLive ? "Live · Meta Graph API" : "Snapshot", detail: null, tier: null, capabilities: [], warnings: [], uploadedAt: null, accountId: activeAccount };
+      : { kind: "graph" as const, label: "Live · Meta Graph API", detail: null, tier: null, capabilities: [], warnings: [], uploadedAt: null, accountId: activeAccount };
 
     return NextResponse.json({
       campaign,

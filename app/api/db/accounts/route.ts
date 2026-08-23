@@ -10,7 +10,7 @@
 // way to run AdLens and must not depend on any Meta credential existing.
 
 import { NextResponse } from "next/server";
-import { MergedDataSource } from "@/lib/datasource";
+import { LiveDataSource } from "@/lib/datasource";
 import { fetchAccountInfo, metaConfigured, LIVE_PREFIX, setActiveAccount } from "@/lib/meta";
 import { listBatches, isUploadAccount, type UploadBatch } from "@/lib/uploads";
 
@@ -79,10 +79,10 @@ export async function GET(req: Request) {
         liveError: "that uploaded report no longer exists",
       }, NO_STORE);
     }
-    let campaigns: Awaited<ReturnType<MergedDataSource["listCampaigns"]>> = [];
+    let campaigns: Awaited<ReturnType<LiveDataSource["listCampaigns"]>> = [];
     let liveError: string | null = null;
     try {
-      const all = await new MergedDataSource().listCampaigns();
+      const all = await new LiveDataSource().listCampaigns();
       campaigns = all.filter((c) => String(c.id).startsWith(LIVE_PREFIX));
     } catch (e: unknown) {
       liveError = e instanceof Error ? e.message : "could not read that uploaded report";
@@ -150,7 +150,7 @@ export async function GET(req: Request) {
     const account = await fetchAccountInfo();
     // Deliberately NOT caught here: if live data can't be read we must say so
     // rather than quietly returning an empty list that looks like "no campaigns".
-    const all = await new MergedDataSource().listCampaigns();
+    const all = await new LiveDataSource().listCampaigns();
     const campaigns = all.filter((c) => String(c.id).startsWith(LIVE_PREFIX));
     const { getLastSynced } = await import("@/lib/meta");
     const lastSynced = await getLastSynced();
@@ -168,7 +168,7 @@ export async function GET(req: Request) {
     }, NO_STORE);
   } catch (e: unknown) {
     // Credentials exist but live data is unreachable — an explicit error state,
-    // not a silent downgrade to demo data. Uploads are unaffected, so they stay.
+    // not a silent downgrade to an empty list. Uploads are unaffected, so they stay.
     return NextResponse.json({
       configured: true,
       accessibleAccounts: uploadAccounts,

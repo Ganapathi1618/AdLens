@@ -6,7 +6,7 @@
 // campaign over its stored daily series.
 
 import { NextResponse } from "next/server";
-import { MergedDataSource } from "@/lib/datasource";
+import { LiveDataSource } from "@/lib/datasource";
 import { evaluateCampaign, sortAlerts, THRESHOLDS, type Alert } from "@/lib/alerts";
 import { LIVE_PREFIX, setActiveAccount } from "@/lib/meta";
 
@@ -26,7 +26,7 @@ export async function GET(req: Request) {
   if (account) setActiveAccount(account);
 
   try {
-    const src = new MergedDataSource();
+    const src = new LiveDataSource();
     const all = await src.listCampaigns();
     const real = all.filter((c) => String(c.id).startsWith(LIVE_PREFIX));
 

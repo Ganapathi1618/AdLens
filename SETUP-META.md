@@ -1,25 +1,25 @@
 # AdLens — Live Meta Data (already wired into this repo)
 
-Every code file is ALREADY in this project. Nothing turns "live" until you add two
-values to Vercel — until then the app is byte-for-byte your current prototype.
+Every code file is ALREADY in this project. Add two values to Vercel and the app
+syncs your own ad account. Without them, `/upload` is the other supported way in —
+see CONNECT-META.md for the self-service OAuth route.
 
 What's in the repo now:
 
 | File | What it does |
 |---|---|
 | `lib/meta.ts` | NEW — Graph API fetchers + mappers into the app's own Campaign/DayPoint types |
-| `lib/datasource.ts` | UPDATED — `MetaDataSource` is now REAL (was throwing "implement for CP2"); new `MergedDataSource`; `DATA_SOURCE` supports `merged` |
+| `lib/datasource.ts` | `LiveDataSource` — the single implementation, reading the `meta_*` tables |
 | `app/api/sync/meta/route.ts` | NEW — pulls Meta campaigns + daily insights into Neon |
-| `app/api/db/status/route.ts` | NEW — seeded count · live count · last-synced (header-badge data) |
-| `app/api/db/campaigns-merged/route.ts` | NEW — live + seeded through the seam, visible in the browser |
+| `app/api/db/status/route.ts` | NEW — campaign count · upload count · last-synced (header-badge data) |
 | `db/meta-sync.sql` | NEW — three additive tables: `meta_campaigns`, `meta_daily_metrics`, `sync_log` |
 
 The safety rules baked in:
 
 - No token set → sync route is a polite no-op, UI unchanged, build passes.
-- Token set but Meta errors → seeded data still renders; last good live rows still render.
+- Token set but Meta errors → the error is surfaced, and the last good synced rows still render.
 - A failed sync never deletes anything — upserts only.
-- Dashboard pages still read the seeded dataset directly (deliberate — see "Wiring the UI").
+- Every page reads through `dataSource`; nothing is displayed that Postgres did not supply.
 
 ---
 
@@ -60,7 +60,6 @@ Settings → Environment Variables:
 | `META_AD_ACCOUNT_ID` | number only, e.g. `1234567890123` | yes |
 | `SYNC_SECRET` | any random string | optional — locks the sync URL |
 | `META_API_VERSION` | e.g. `v23.0` | optional override |
-| `DATA_SOURCE` | `merged` | optional — see modes below |
 
 Then **Deployments → Redeploy** (env vars only apply to new deployments).
 
@@ -69,37 +68,16 @@ Then **Deployments → Redeploy** (env vars only apply to new deployments).
 1. `/api/db/status` → expect `"liveConfigured": true`
 2. `/api/sync/meta?days=7` → expect `"synced": true` with counts
    (add `&key=YOUR_SYNC_SECRET` if you set one)
-3. `/api/db/campaigns-merged` → your real campaigns appear first with ids like
-   `"meta_1234…"` and `"note": "Live · Meta Graph API"`, the 55 seeded ones follow
+3. `/api/db/accounts` → your real campaigns, with ids like `"meta_1234…"` and
+   `"note": "Live · Meta Graph API"`
 4. `/api/db/status` again → `lastSynced` is stamped. That's the badge data.
 
 If step 2 errors, it prints **Meta's actual error message** — 90% of the time it's a
 token missing `ads_read`, or an account id typed with the `act_` prefix.
 
-## DATA_SOURCE modes (`lib/datasource.ts`)
+## The data source (`lib/datasource.ts`)
 
-| Value | Behavior |
-|---|---|
-| *(unset)* | MockDataSource — exactly today's prototype |
-| `merged` | live Meta rows stacked on top of the seeded portfolio (demo-safe) |
-| `meta` | pure live — only synced Meta campaigns |
-
-## Wiring the UI (deliberately NOT done yet)
-
-Dashboard pages currently import the seeded dataset directly (`@/lib/data`) — that's why
-the demo cannot break. Once you've eyeballed `/api/db/campaigns-merged` and like it, the
-flip is: make a page read through `dataSource` (from `@/lib/datasource`) instead. Do it
-page by page, after CP2 unless everything else is finished. Live campaigns have no adset
-drill-down yet (`MetaDataSource.getAdsets` returns `[]` — adset-level sync is post-CP2
-scope, documented in the code).
-
-## Gotchas
-
-- **Attribution lag:** Meta restates conversions for ~72 h → sync default re-pulls the
-  trailing 3 days (upserts overwrite cleanly). Backfill more with `?days=30`.
-- **Budgets:** Meta reports `daily_budget` in minor units (cents) — the sync converts to
-  dollars. Campaign-level budget may be 0 when budgets live at adset level (pacing shows 0).
-- **Keeping fresh:** re-run the sync URL anytime; automate later with a `vercel.json`
-  cron hitting `/api/sync/meta` daily. Not needed for CP2.
-- **Next platforms:** LinkedIn/Pinterest = one more adapter class each implementing the
-  same `DataSource` interface, one more `sync_log` row. The seam is the product.
+`LiveDataSource` is the only implementation. It reads the `meta_*` tables, which
+hold both synced rows (`data_source = 'graph'`) and uploaded ones
+(`data_source = 'upload'`). There is no mode switch and no seeded fallback — a
+database with nothing in it produces empty states, never invented campaigns.
