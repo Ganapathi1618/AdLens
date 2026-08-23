@@ -73,7 +73,7 @@ export function totalsFor(days: DayPoint[]): PeriodTotals {
   };
 }
 
-function change(
+export function change(
   metric: string,
   current: number | null,
   previous: number | null,

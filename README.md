@@ -48,6 +48,7 @@ Port already in use? `npm run dev -- -p 3001`.
 | Campaign portfolio | `/overview` |
 | Account wizard (+ Connect with Facebook) | `/check` |
 | Upload a report | `/upload` |
+| Month-over-month report | `/monthly` |
 
 ### Optional: real Claude-powered AI chat
 
@@ -112,6 +113,26 @@ their flight so a one-month export paces against its own share of the budget,
 and re-uploading a corrected export replaces the batch instead of doubling it.
 Schema and storage details: [`db/upload.sql`](db/upload.sql).
 
+### Building a month-over-month report from uploads
+
+One report can hold several monthly exports. On `/upload`, pick **Add to an
+existing report** instead of creating a new one — the file is merged by date, so
+days it already covers are corrected and new months are added.
+
+With two or more months in a report, **`/monthly`** compares any two of them:
+portfolio metrics, the campaigns that improved or declined most, and the ones
+that started or stopped between the months.
+
+The partial month is handled explicitly. An export covering 1–18 August against
+a full July would show spend "down 42%" — a fact about the export, not the
+campaigns — so unequal months are cut to the same day span and the report says
+it did that. Two complete months always compare in full, even when one has 30
+days and the other 31, because that is what a calendar comparison means.
+
+Spend and impressions are reported with a percentage but **no good/bad verdict**:
+volume is not quality, and telling a client that spending less is "worse" is a
+wrong answer, not a nuance.
+
 ## What's inside
 
 | Page | What it does |
@@ -126,6 +147,7 @@ Schema and storage details: [`db/upload.sql`](db/upload.sql).
 | **Ledger** | Every recommendation → followed/ignored → measured outcome. 64% action rate, +31% avg improvement |
 | **Alerts** | Rules-engine alerts (ROAS/CTR/CPC/pacing thresholds) |
 | **Upload report** | No account access? Upload an Ads Manager export (.csv/.xlsx) and get the same analysis — see [Uploaded reports](#uploaded-reports) |
+| **Month over month** | Two calendar months side by side across every campaign: portfolio deltas, biggest movers, campaigns that started or stopped. Printable |
 | **Connect with Facebook** | Users add their own Meta ad accounts with one click — OAuth, no app setup or pasted tokens, unlimited accounts per deployment — see [CONNECT-META.md](CONNECT-META.md) |
 
 ## Architecture
@@ -137,7 +159,8 @@ Schema and storage details: [`db/upload.sql`](db/upload.sql).
 - `lib/status.ts` — Meta `effective_status` → Active / Paused / Archived / In Review.
 - `lib/periods.ts` — week-over-week and month-over-month. Ratios are recomputed from period totals (never averaged across days), and a comparison is withheld when either window lacks history.
 - `lib/adsReport.ts` — uploaded export → the app's own shapes: column mapping, capability tiering, and normalisation. `lib/xlsx.ts` is a dependency-free .xlsx reader; `lib/csv.ts` is the single place a cell becomes a number or a date, so .csv and .xlsx can never disagree.
-- `lib/uploads.ts` — an uploaded report is stored as a synthetic ad account in the same `meta_*` tables, so it reuses the entire live read path rather than duplicating it.
+- `lib/uploads.ts` — an uploaded report is stored as a synthetic ad account in the same `meta_*` tables, so it reuses the entire live read path rather than duplicating it. Commits are `replace` or `append`; appending is what lets one report accumulate several months.
+- `lib/monthly.ts` — calendar-month comparison. `lib/periods.ts` does rolling 28-day windows for trend detection; this does "August vs July" for a client, which is a different question and needs different handling of partial months.
 - `app/api/cron/sync` — nightly 02:00 UTC sync of **every** account, OAuth-connected and env-credential alike (schedule in `vercel.json`).
 - `lib/store.ts` — Zustand: selected campaign drives AI panel visibility (only shows after a campaign is chosen).
 

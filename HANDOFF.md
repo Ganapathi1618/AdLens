@@ -88,6 +88,39 @@ too:
 Tests: `npm run test:upload` (parsing/mapping always; persistence with
 `TEST_DATABASE_URL`, which exercises the real bulk inserts and read-back).
 
+## 2c. Month-over-month reports
+
+`lib/monthly.ts` compares **calendar months**; `lib/periods.ts` compares rolling
+28-day windows. Both are wanted — "is this trending down" is a different
+question from "how did August do against July" — so neither replaces the other.
+
+Two decisions to preserve:
+
+1. **Partial months are aligned, not compared raw.** An 18-day August against a
+   full July reports spend down ~42%, which measures the export, not the
+   campaigns. Unequal months are cut to the same day-of-month span and the
+   report states it. Two COMPLETE months always compare in full, even at 30 vs
+   31 days — truncating there would silently drop the 31st.
+2. **Volume metrics carry no verdict.** Spend and impressions report a
+   percentage with `better: null`. Marking a spend decrease "worse" with no
+   reference to what it bought is a wrong verdict in front of a client.
+
+Campaigns present in only one month are separated into started/stopped rather
+than given a percentage against zero, and the movers lists rank by money at
+stake, not by percentage — a 90% swing on $12 is noise.
+
+**Uploads can now append.** `commitUpload({ mode: "append" })` merges a file into
+an existing batch instead of replacing it: entity ids are deterministic per
+batch, so a campaign in both files updates in place and only its new dates are
+inserted. Batch statistics are recomputed from the database after every commit
+so the recorded counts cannot drift from the rows, and `sources` records every
+file that fed the batch. A capability is claimed only if EVERY source file
+supports it — if August carried frequency and September did not, the batch
+cannot offer frequency.
+
+Tests: `npm run test:monthly` (20 checks, mostly about partial months and
+verdicts).
+
 ## 3. Live data flow
 
 ```
