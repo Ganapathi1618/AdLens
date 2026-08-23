@@ -103,6 +103,11 @@ export async function POST(req: Request) {
 
   // Re-committing an existing batch keeps its id, so links already handed out
   // (and the campaign ids derived from it) stay valid.
+  //
+  // mode=append merges this file into that batch instead of replacing it,
+  // which is how one report accumulates several months for a month-over-month
+  // comparison. Appending to nothing is just a normal first upload.
+  const commitMode = (form.get("commitMode") as string | null) === "append" ? "append" : "replace";
   const requested = (form.get("account") as string | null) ?? "";
   const account = isUploadAccount(requested) ? requested : newUploadAccountId();
   if (requested && !isUploadAccount(requested)) {
@@ -124,7 +129,8 @@ export async function POST(req: Request) {
       return badRequest("No campaigns could be read from that file. Check the campaign-name column mapping.");
     }
     const batch = await commitUpload({
-      account, label, filename, sheet: analysis.sheet, timezone,
+      account, mode: requested ? commitMode : "replace",
+      label, filename, sheet: analysis.sheet, timezone,
       level: analysis.level, granularity: analysis.granularity, tier: analysis.tier,
       distinctDays: analysis.distinctDays, rowsParsed: analysis.counts.rows,
       capabilities: analysis.capabilities, warnings: analysis.warnings,
